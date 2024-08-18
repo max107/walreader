@@ -1,0 +1,42 @@
+run:
+  concurrency: 6
+  timeout: 5m
+issues:
+  exclude-use-default: false
+  exclude:
+    - ST1000
+linters:
+  fast: false
+  disable:
+    - wrapcheck
+    - execinquery
+    - mnd
+    - varnamelen
+    - tagliatelle
+    - tagalign
+    - nilnil
+    - lll
+    - dupl
+    - nlreturn
+    - gomnd
+    - nlreturn
+    - wsl
+    - gochecknoglobals
+    - funlen
+    - godot
+    - ireturn
+    - paralleltest
+    - exhaustruct
+    - gci
+    - gofumpt
+    - revive
+  enable-all: true
+linters-settings:
+  cyclop:
+    max-complexity: 20
+  depguard:
+    rules:
+      main:
+        deny:
+          - pkg: reflect
+            desc: who needs reflection
