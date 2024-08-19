@@ -15,6 +15,7 @@ import (
 )
 
 func TestWal(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/app?replication=database&application_name=walreader1")
 	ctx := context.TODO()
 
 	config, err := pgx.ParseConfig(os.Getenv("DATABASE_URL"))

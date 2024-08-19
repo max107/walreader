@@ -3,7 +3,6 @@ package walreader
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
@@ -115,16 +114,20 @@ func (w *Listener) Init(ctx context.Context) error {
 		}
 	}
 
-	return nil
-}
-
-func (w *Listener) findLSN(ctx context.Context) (pglogrepl.LSN, error) {
-	sysIdent, err := pglogrepl.IdentifySystem(ctx, w.conn)
+	primaryKeys, err := prefetchPrimaryKeys(
+		ctx,
+		w.conn,
+		w.typeMap,
+		w.schema,
+		w.tables,
+	)
 	if err != nil {
-		return 0, err
+		return err
 	}
 
-	return sysIdent.XLogPos, nil
+	w.primaryKeys = primaryKeys
+
+	return nil
 }
 
 func (w *Listener) flush(ctx context.Context, cb Callback) error {
@@ -135,7 +138,11 @@ func (w *Listener) flush(ctx context.Context, cb Callback) error {
 		return err
 	}
 
-	if err := w.commit(ctx, w.lsn); err != nil {
+	if err := commit(
+		ctx,
+		w.conn,
+		w.lsn,
+	); err != nil {
 		return err
 	}
 
@@ -187,41 +194,18 @@ func (w *Listener) Start(ctx context.Context, cb Callback) error {
 }
 
 func (w *Listener) listenWal(ctx context.Context) error { //nolint:gocognit,cyclop
-	primaryKeys, err := prefetchPrimaryKeys(
+	lastWrittenLSN, err := findOffset(
 		ctx,
 		w.conn,
-		w.typeMap,
-		w.schema,
-		w.tables,
 	)
 	if err != nil {
 		return err
 	}
 
-	w.primaryKeys = primaryKeys
-
-	lastWrittenLSN, err := w.findLSN(ctx)
-	if err != nil {
-		return err
-	}
-
-	// https://github.com/jackc/pglogrepl/issues/40#issuecomment-1623394628
-	// https://github.com/jackc/pglogrepl/issues/40#issuecomment-1988791411
-	if err := pglogrepl.StartReplication(
+	if err := startReplication(
 		ctx,
 		w.conn,
 		w.slotName,
-		pglogrepl.LSN(0),
-		pglogrepl.StartReplicationOptions{
-			// streaming of large transactions is available since PG 14 (protocol version 2)
-			// we also need to set 'streaming' to 'true'
-			PluginArgs: []string{
-				"proto_version '2'",
-				fmt.Sprintf("publication_names '%s'", w.slotName),
-				"messages 'true'",
-				"streaming 'true'",
-			},
-		},
 	); err != nil {
 		return err
 	}
@@ -239,7 +223,11 @@ func (w *Listener) listenWal(ctx context.Context) error { //nolint:gocognit,cycl
 			return nil
 		default:
 			if time.Now().After(deadline) {
-				if err := w.commit(ctx, lastWrittenLSN); err != nil {
+				if err := commit(
+					ctx,
+					w.conn,
+					lastWrittenLSN,
+				); err != nil {
 					return err
 				}
 
@@ -292,7 +280,10 @@ func (w *Listener) listenWal(ctx context.Context) error { //nolint:gocognit,cycl
 					return err
 				}
 
-				if err := w.process(ctx, xld.WALData, &inStream); err != nil {
+				if err := w.process(
+					xld.WALData,
+					&inStream,
+				); err != nil {
 					return err
 				}
 
@@ -305,7 +296,6 @@ func (w *Listener) listenWal(ctx context.Context) error { //nolint:gocognit,cycl
 }
 
 func (w *Listener) createEvent(
-	ctx context.Context,
 	relationID uint32,
 	tuple *pglogrepl.TupleData,
 	eventType EventType,
@@ -334,18 +324,7 @@ func (w *Listener) createEvent(
 	return event, nil
 }
 
-func (w *Listener) commit(ctx context.Context, val pglogrepl.LSN) error {
-	return pglogrepl.SendStandbyStatusUpdate(
-		ctx,
-		w.conn,
-		pglogrepl.StandbyStatusUpdate{
-			WALWritePosition: val,
-		},
-	)
-}
-
 func (w *Listener) process(
-	ctx context.Context,
 	walData []byte,
 	inStream *bool,
 ) error {
@@ -362,7 +341,11 @@ func (w *Listener) process(
 		w.lsn = msg.TransactionEndLSN
 
 	case *pglogrepl.InsertMessageV2:
-		event, err := w.createEvent(ctx, msg.RelationID, msg.Tuple, Insert)
+		event, err := w.createEvent(
+			msg.RelationID,
+			msg.Tuple,
+			Insert,
+		)
 		if err != nil {
 			return err
 		}
@@ -372,14 +355,22 @@ func (w *Listener) process(
 		// if you need OldTuple
 		// https://pg2es.github.io/getting-started/replica-identity/
 		// https://github.com/pg2es/search-replica/blob/5a3b8c7919fd290c9943ade7a7f04c8532becdcd/demo/schema.sql#L50-L57
-		event, err := w.createEvent(ctx, msg.RelationID, msg.NewTuple, Update)
+		event, err := w.createEvent(
+			msg.RelationID,
+			msg.NewTuple,
+			Update,
+		)
 		if err != nil {
 			return err
 		}
 		w.ch <- event
 
 	case *pglogrepl.DeleteMessageV2:
-		event, err := w.createEvent(ctx, msg.RelationID, msg.OldTuple, Delete)
+		event, err := w.createEvent(
+			msg.RelationID,
+			msg.OldTuple,
+			Delete,
+		)
 		if err != nil {
 			return err
 		}
@@ -387,7 +378,11 @@ func (w *Listener) process(
 
 	case *pglogrepl.TruncateMessageV2:
 		for _, id := range msg.RelationIDs {
-			event, err := w.createEvent(ctx, id, nil, Truncate)
+			event, err := w.createEvent(
+				id,
+				nil,
+				Truncate,
+			)
 			if err != nil {
 				return err
 			}
