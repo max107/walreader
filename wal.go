@@ -3,6 +3,7 @@ package walreader
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -58,7 +59,7 @@ func (w *Listener) Clean(ctx context.Context) error {
 		w.conn,
 		w.slotName,
 	); err != nil {
-		return err
+		return fmt.Errorf("could not drop publication: %w", err)
 	}
 
 	has, err := hasReplicationSlot(
@@ -68,18 +69,22 @@ func (w *Listener) Clean(ctx context.Context) error {
 		w.slotName,
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("could not check replication slot: %w", err)
 	}
 
 	if !has {
 		return nil
 	}
 
-	return dropReplicationSlot(
+	if err := dropReplicationSlot(
 		ctx,
 		w.conn,
 		w.slotName,
-	)
+	); err != nil {
+		return fmt.Errorf("could not drop replication slot: %w", err)
+	}
+
+	return nil
 }
 
 func (w *Listener) Init(ctx context.Context) error {
@@ -91,7 +96,7 @@ func (w *Listener) Init(ctx context.Context) error {
 		w.schema,
 		w.tables,
 	); err != nil {
-		return err
+		return fmt.Errorf("could not init publication: %w", err)
 	}
 
 	has, err := hasReplicationSlot(
@@ -101,7 +106,7 @@ func (w *Listener) Init(ctx context.Context) error {
 		w.slotName,
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("could not check replication slot: %w", err)
 	}
 
 	if !has {
@@ -110,7 +115,7 @@ func (w *Listener) Init(ctx context.Context) error {
 			w.conn,
 			w.slotName,
 		); err != nil {
-			return err
+			return fmt.Errorf("could not create replication slot: %w", err)
 		}
 	}
 
@@ -122,7 +127,7 @@ func (w *Listener) Init(ctx context.Context) error {
 		w.tables,
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("could not prefetch primary keys: %w", err)
 	}
 
 	w.primaryKeys = primaryKeys
@@ -135,7 +140,7 @@ func (w *Listener) flush(ctx context.Context, cb Callback) error {
 	defer w.l.Unlock()
 
 	if err := cb(w.events); err != nil {
-		return err
+		return fmt.Errorf("callback error: %w", err)
 	}
 
 	if err := commit(
@@ -143,7 +148,7 @@ func (w *Listener) flush(ctx context.Context, cb Callback) error {
 		w.conn,
 		w.lsn,
 	); err != nil {
-		return err
+		return fmt.Errorf("commit error: %w", err)
 	}
 
 	w.events = make([]*Event, 0)
@@ -155,7 +160,11 @@ func (w *Listener) Start(ctx context.Context, cb Callback) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		return w.listenWal(ctx)
+		if err := w.listenWal(ctx); err != nil {
+			return fmt.Errorf("could not listen wal: %w", err)
+		}
+
+		return nil
 	})
 
 	g.Go(func() error {
@@ -174,7 +183,7 @@ func (w *Listener) Start(ctx context.Context, cb Callback) error {
 				}
 
 				if err := w.flush(ctx, cb); err != nil {
-					return err
+					return fmt.Errorf("could not flush events: %w", err)
 				}
 			case msg, ok := <-w.ch:
 				if !ok {
@@ -187,7 +196,7 @@ func (w *Listener) Start(ctx context.Context, cb Callback) error {
 	})
 
 	if err := g.Wait(); err != nil {
-		return err
+		return fmt.Errorf("wait error: %w", err)
 	}
 
 	return nil
@@ -199,7 +208,7 @@ func (w *Listener) listenWal(ctx context.Context) error { //nolint:gocognit,cycl
 		w.conn,
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("could not find offset: %w", err)
 	}
 
 	if err := startReplication(
@@ -207,7 +216,7 @@ func (w *Listener) listenWal(ctx context.Context) error { //nolint:gocognit,cycl
 		w.conn,
 		w.slotName,
 	); err != nil {
-		return err
+		return fmt.Errorf("could not start replication: %w", err)
 	}
 
 	deadline := time.Now().Add(w.timeout)
@@ -247,11 +256,11 @@ func (w *Listener) listenWal(ctx context.Context) error { //nolint:gocognit,cycl
 					return nil
 				}
 
-				return err
+				return fmt.Errorf("receive message: %w", err)
 			}
 
 			if _, ok := rawMsg.(*pgproto3.ErrorResponse); ok {
-				return ErrWalError
+				return fmt.Errorf("received error response: %w", ErrWalError)
 			}
 
 			msg, ok := rawMsg.(*pgproto3.CopyData)
@@ -263,7 +272,7 @@ func (w *Listener) listenWal(ctx context.Context) error { //nolint:gocognit,cycl
 			case pglogrepl.PrimaryKeepaliveMessageByteID:
 				pkm, err := pglogrepl.ParsePrimaryKeepaliveMessage(msg.Data[1:])
 				if err != nil {
-					return err
+					return fmt.Errorf("could not parse primary keepalive message: %w", err)
 				}
 
 				if pkm.ServerWALEnd > lastWrittenLSN {
@@ -277,14 +286,14 @@ func (w *Listener) listenWal(ctx context.Context) error { //nolint:gocognit,cycl
 			case pglogrepl.XLogDataByteID:
 				xld, err := pglogrepl.ParseXLogData(msg.Data[1:])
 				if err != nil {
-					return err
+					return fmt.Errorf("could not parse XLogData: %w", err)
 				}
 
 				if err := w.process(
 					xld.WALData,
 					&inStream,
 				); err != nil {
-					return err
+					return fmt.Errorf("could not process XLogData: %w", err)
 				}
 
 				if xld.WALStart > lastWrittenLSN {
@@ -302,7 +311,7 @@ func (w *Listener) createEvent(
 ) (*Event, error) {
 	rel, ok := w.relations[relationID]
 	if !ok {
-		return nil, ErrUnknownRelation
+		return nil, fmt.Errorf("could not find relation %d: %w", relationID, ErrUnknownRelation)
 	}
 
 	event := &Event{
@@ -315,7 +324,7 @@ func (w *Listener) createEvent(
 	if tuple != nil {
 		values, err := extractValues(w.typeMap, tuple, rel)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("could not extract values: %w", err)
 		}
 
 		event.Values = values
@@ -330,7 +339,7 @@ func (w *Listener) process(
 ) error {
 	logicalMsg, err := pglogrepl.ParseV2(walData, *inStream)
 	if err != nil {
-		return err
+		return fmt.Errorf("could not parse WAL data: %w", err)
 	}
 
 	switch msg := logicalMsg.(type) {
@@ -347,7 +356,7 @@ func (w *Listener) process(
 			Insert,
 		)
 		if err != nil {
-			return err
+			return fmt.Errorf("could not create event: %w", err)
 		}
 		w.ch <- event
 
@@ -361,7 +370,7 @@ func (w *Listener) process(
 			Update,
 		)
 		if err != nil {
-			return err
+			return fmt.Errorf("could not create event: %w", err)
 		}
 		w.ch <- event
 
@@ -372,7 +381,7 @@ func (w *Listener) process(
 			Delete,
 		)
 		if err != nil {
-			return err
+			return fmt.Errorf("could not create event: %w", err)
 		}
 		w.ch <- event
 
@@ -384,7 +393,7 @@ func (w *Listener) process(
 				Truncate,
 			)
 			if err != nil {
-				return err
+				return fmt.Errorf("could not create event: %w", err)
 			}
 			w.ch <- event
 		}
