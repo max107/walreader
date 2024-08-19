@@ -1,0 +1,33 @@
+name: Go
+on:
+  push:
+    branches: ['*']
+  pull_request:
+    branches: ['*']
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: bitnami/postgresql:16
+        env:
+          POSTGRESQL_PASSWORD: postgres
+          POSTGRESQL_DATABASE: app
+          POSTGRESQL_WAL_LEVEL: logical
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.23'
+      - name: Test
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/app?replication=database&application_name=walreader1
+        run: go test -v ./...
