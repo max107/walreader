@@ -78,27 +78,31 @@ func initPublication(
 		return err
 	}
 
+	action := "CREATE"
+	if exist {
+		action = "ALTER"
+	}
+
+	var (
+		schemaTemplate = `%s PUBLICATION %s FOR TABLES IN SCHEMA %s`
+		tablesTemplate = `%s PUBLICATION %s FOR TABLE %s`
+	)
+
 	var sql string
-	if exist && len(tables) > 0 {
+	if len(tables) > 0 {
 		sql = fmt.Sprintf(
-			"ALTER PUBLICATION %s SET TABLE %s;",
+			tablesTemplate,
+			action,
 			slotName,
 			buildTables(schema, tables),
 		)
 	} else {
-		if len(tables) > 0 {
-			sql = fmt.Sprintf(
-				"CREATE PUBLICATION %s FOR TABLE %s;",
-				slotName,
-				buildTables(schema, tables),
-			)
-		} else {
-			sql = fmt.Sprintf(
-				"CREATE PUBLICATION %s FOR TABLES IN SCHEMA %s;",
-				slotName,
-				schema,
-			)
-		}
+		sql = fmt.Sprintf(
+			schemaTemplate,
+			action,
+			slotName,
+			schema,
+		)
 	}
 
 	_, err = conn.Exec(
@@ -136,7 +140,7 @@ func hasPublication(
 		conn,
 		typeMap,
 		fmt.Sprintf(
-			`select pubname from pg_catalog.pg_publication where pubname = '%s';`,
+			`SELECT pubname FROM pg_catalog.pg_publication WHERE pubname = '%s';`,
 			slotName,
 		),
 	)
