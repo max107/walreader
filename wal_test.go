@@ -151,3 +151,57 @@ func TestSpecificTables(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestAlterSchema(t *testing.T) {
+	ctx := context.TODO()
+
+	config, err := pgx.ParseConfig(os.Getenv("DATABASE_URL"))
+	require.NoError(t, err)
+
+	conn, err := pgx.ConnectConfig(ctx, config)
+	require.NoError(t, err)
+
+	googleuuid.Register(conn.TypeMap())
+
+	t.Cleanup(func() {
+		_ = conn.Close(ctx)
+	})
+
+	listener := walreader.NewListener(
+		conn.PgConn(),
+		conn.TypeMap(),
+		"numbers_slot",
+		"public",
+		nil,
+	)
+
+	require.NoError(t, listener.Init(ctx))
+	require.NoError(t, listener.Init(ctx))
+}
+
+func TestAlterTables(t *testing.T) {
+	ctx := context.TODO()
+
+	config, err := pgx.ParseConfig(os.Getenv("DATABASE_URL"))
+	require.NoError(t, err)
+
+	conn, err := pgx.ConnectConfig(ctx, config)
+	require.NoError(t, err)
+
+	googleuuid.Register(conn.TypeMap())
+
+	t.Cleanup(func() {
+		_ = conn.Close(ctx)
+	})
+
+	listener := walreader.NewListener(
+		conn.PgConn(),
+		conn.TypeMap(),
+		"numbers_slot",
+		"public",
+		[]string{"numbers"},
+	)
+
+	require.NoError(t, listener.Init(ctx))
+	require.NoError(t, listener.Init(ctx))
+}

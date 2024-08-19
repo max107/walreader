@@ -65,7 +65,6 @@ func (w *Listener) Clean(ctx context.Context) error {
 	has, err := hasReplicationSlot(
 		ctx,
 		w.conn,
-		w.typeMap,
 		w.slotName,
 	)
 	if err != nil {
@@ -91,7 +90,6 @@ func (w *Listener) Init(ctx context.Context) error {
 	if err := initPublication(
 		ctx,
 		w.conn,
-		w.typeMap,
 		w.slotName,
 		w.schema,
 		w.tables,
@@ -102,7 +100,6 @@ func (w *Listener) Init(ctx context.Context) error {
 	has, err := hasReplicationSlot(
 		ctx,
 		w.conn,
-		w.typeMap,
 		w.slotName,
 	)
 	if err != nil {

@@ -64,48 +64,98 @@ func startReplication(
 func initPublication(
 	ctx context.Context,
 	conn *pgconn.PgConn,
-	typeMap *pgtype.Map,
 	slotName, schema string,
 	tables []string,
 ) error {
 	exist, err := hasPublication(
 		ctx,
 		conn,
-		typeMap,
 		slotName,
 	)
 	if err != nil {
 		return err
 	}
 
-	action := "CREATE"
 	if exist {
-		action = "ALTER"
+		return updatePublication(
+			ctx,
+			conn,
+			slotName,
+			schema,
+			tables,
+		)
 	}
 
+	return createPublication(
+		ctx,
+		conn,
+		slotName,
+		schema,
+		tables,
+	)
+}
+
+func updatePublication(
+	ctx context.Context,
+	conn *pgconn.PgConn,
+	slotName, schema string,
+	tables []string,
+) error {
 	var (
-		schemaTemplate = `%s PUBLICATION %s FOR TABLES IN SCHEMA %s`
-		tablesTemplate = `%s PUBLICATION %s FOR TABLE %s`
+		schemaTemplate = `ALTER PUBLICATION %s SET TABLES IN SCHEMA %s`
+		tablesTemplate = `ALTER PUBLICATION %s SET TABLE %s`
 	)
 
 	var sql string
 	if len(tables) > 0 {
 		sql = fmt.Sprintf(
 			tablesTemplate,
-			action,
 			slotName,
 			buildTables(schema, tables),
 		)
 	} else {
 		sql = fmt.Sprintf(
 			schemaTemplate,
-			action,
 			slotName,
 			schema,
 		)
 	}
 
-	_, err = conn.Exec(
+	_, err := conn.Exec(
+		ctx,
+		sql,
+	).ReadAll()
+
+	return err
+}
+
+func createPublication(
+	ctx context.Context,
+	conn *pgconn.PgConn,
+	slotName, schema string,
+	tables []string,
+) error {
+	var (
+		schemaTemplate = `CREATE PUBLICATION %s FOR TABLES IN SCHEMA %s`
+		tablesTemplate = `CREATE PUBLICATION %s FOR TABLE %s`
+	)
+
+	var sql string
+	if len(tables) > 0 {
+		sql = fmt.Sprintf(
+			tablesTemplate,
+			slotName,
+			buildTables(schema, tables),
+		)
+	} else {
+		sql = fmt.Sprintf(
+			schemaTemplate,
+			slotName,
+			schema,
+		)
+	}
+
+	_, err := conn.Exec(
 		ctx,
 		sql,
 	).ReadAll()
@@ -132,20 +182,18 @@ func createReplicationSlot(
 func hasPublication(
 	ctx context.Context,
 	conn *pgconn.PgConn,
-	typeMap *pgtype.Map,
 	slotName string,
 ) (bool, error) {
-	rows, err := query(
+	rows, err := count(
 		ctx,
 		conn,
-		typeMap,
 		fmt.Sprintf(
 			`SELECT pubname FROM pg_catalog.pg_publication WHERE pubname = '%s';`,
 			slotName,
 		),
 	)
 
-	return len(rows) > 0, err
+	return rows > 0, err
 }
 
 func dropPublication(
@@ -179,20 +227,18 @@ func dropReplicationSlot(
 func hasReplicationSlot(
 	ctx context.Context,
 	conn *pgconn.PgConn,
-	typeMap *pgtype.Map,
 	slotName string,
 ) (bool, error) {
-	rows, err := query(
+	rows, err := count(
 		ctx,
 		conn,
-		typeMap,
 		fmt.Sprintf(
 			`SELECT slot_name FROM pg_replication_slots WHERE slot_name = '%s';`,
 			slotName,
 		),
 	)
 
-	return len(rows) > 0, err
+	return rows > 0, err
 }
 
 func buildTables(schema string, tables []string) string {
@@ -330,6 +376,29 @@ func query(
 				}
 			}
 		}
+	}
+
+	return result, nil
+}
+
+func count(
+	ctx context.Context,
+	conn *pgconn.PgConn,
+	sql string,
+) (int, error) {
+	rows, err := conn.Exec(ctx, sql).ReadAll()
+	if err != nil {
+		return 0, err
+	}
+
+	var result int
+
+	for _, row := range rows {
+		if row.Err != nil {
+			return 0, err
+		}
+
+		result += len(row.Rows)
 	}
 
 	return result, nil
