@@ -40,5 +40,10 @@ func EventToStringKey(e *Event) string {
 		}
 	}
 
-	return e.Schema + "/" + e.Table + "/" + w.String()
+	id := w.String()
+	if len(id) > 0 {
+		return e.Schema + "/" + e.Table + "/" + w.String()
+	}
+
+	return e.Schema + "/" + e.Table
 }
