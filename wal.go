@@ -25,6 +25,10 @@ func NewListener(
 	schema string,
 	tables []string,
 ) *Listener {
+	if schema == "" {
+		schema = "public"
+	}
+
 	return &Listener{
 		conn:      conn,
 		typeMap:   typeMap,
