@@ -90,6 +90,10 @@ func (w *Listener) Clean(ctx context.Context) error {
 	return nil
 }
 
+func (w *Listener) Shutdown(ctx context.Context) error {
+	return terminateBackend(ctx, w.conn, w.slotName)
+}
+
 func (w *Listener) Init(ctx context.Context) error {
 	if err := initPublication(
 		ctx,

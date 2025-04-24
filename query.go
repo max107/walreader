@@ -179,6 +179,22 @@ func createReplicationSlot(
 	return err
 }
 
+func terminateBackend(
+	ctx context.Context,
+	conn *pgconn.PgConn,
+	slotName string,
+) error {
+	_, err := conn.Exec(
+		ctx,
+		fmt.Sprintf(
+			"select pg_terminate_backend(active_pid) from pg_replication_slots where slot_name = '%s';",
+			slotName,
+		),
+	).ReadAll()
+
+	return err
+}
+
 func hasPublication(
 	ctx context.Context,
 	conn *pgconn.PgConn,
