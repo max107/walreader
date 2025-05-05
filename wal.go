@@ -311,7 +311,8 @@ func (w *Listener) listenWal(ctx context.Context) error { //nolint:gocognit,cycl
 
 func (w *Listener) createEvent(
 	relationID uint32,
-	tuple *pglogrepl.TupleData,
+	newTuple *pglogrepl.TupleData,
+	oldTuple *pglogrepl.TupleData,
 	eventType EventType,
 ) (*Event, error) {
 	rel, ok := w.relations[relationID]
@@ -326,13 +327,22 @@ func (w *Listener) createEvent(
 		PrimaryKeys: w.primaryKeys[rel.RelationName],
 	}
 
-	if tuple != nil {
-		values, err := extractValues(w.typeMap, tuple, rel)
+	if newTuple != nil {
+		values, err := extractValues(w.typeMap, newTuple, rel)
 		if err != nil {
 			return nil, fmt.Errorf("could not extract values: %w", err)
 		}
 
 		event.Values = values
+	}
+
+	if oldTuple != nil {
+		values, err := extractValues(w.typeMap, oldTuple, rel)
+		if err != nil {
+			return nil, fmt.Errorf("could not extract values: %w", err)
+		}
+
+		event.OldValues = values
 	}
 
 	return event, nil
@@ -358,6 +368,7 @@ func (w *Listener) process(
 		event, err := w.createEvent(
 			msg.RelationID,
 			msg.Tuple,
+			nil,
 			Insert,
 		)
 		if err != nil {
@@ -372,6 +383,7 @@ func (w *Listener) process(
 		event, err := w.createEvent(
 			msg.RelationID,
 			msg.NewTuple,
+			msg.OldTuple,
 			Update,
 		)
 		if err != nil {
@@ -382,6 +394,7 @@ func (w *Listener) process(
 	case *pglogrepl.DeleteMessageV2:
 		event, err := w.createEvent(
 			msg.RelationID,
+			nil,
 			msg.OldTuple,
 			Delete,
 		)
@@ -394,6 +407,7 @@ func (w *Listener) process(
 		for _, id := range msg.RelationIDs {
 			event, err := w.createEvent(
 				id,
+				nil,
 				nil,
 				Truncate,
 			)

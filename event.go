@@ -21,6 +21,7 @@ type Event struct {
 	Schema      string         `json:"namespace"`
 	Table       string         `json:"table"`
 	Values      map[string]any `json:"values"`
+	OldValues   map[string]any `json:"old_values"`
 	PrimaryKeys []string       `json:"primary_keys"`
 }
 

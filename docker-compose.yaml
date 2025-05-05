@@ -11,7 +11,7 @@ networks:
 services:
   pgsql:
     <<: *x-networks
-    image: bitnami/postgresql:16
+    image: bitnami/postgresql:17
     ports:
       - "5432:5432"
     environment:
