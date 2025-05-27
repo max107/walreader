@@ -2,7 +2,6 @@ package walreader
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -249,6 +248,7 @@ func (w *Listener) listenWal(ctx context.Context) error { //nolint:gocognit
 	// whenever we get StreamStartMessage we set inStream to true and then pass it to DecodeV2 function
 	// on StreamStopMessage we set it back to false
 	inStream := false
+	nextStandbyMessageDeadline := time.Now().Add(w.timeout)
 
 	for {
 		select {
@@ -256,14 +256,22 @@ func (w *Listener) listenWal(ctx context.Context) error { //nolint:gocognit
 			close(w.ch)
 			return nil
 		default:
-			rawMsg, err := w.next(ctx)
+			if time.Now().After(nextStandbyMessageDeadline) {
+				if err := commit(ctx, w.conn, lastWrittenLSN); err != nil {
+					return err
+				}
+				nextStandbyMessageDeadline = time.Now().Add(w.timeout)
+			}
+
+			ctx, cancel := context.WithDeadline(ctx, nextStandbyMessageDeadline)
+			rawMsg, err := w.conn.ReceiveMessage(ctx)
+			cancel()
 			if err != nil {
-				if errors.Is(err, context.Canceled) {
-					// read timeout
+				if pgconn.Timeout(err) {
 					continue
 				}
 
-				return fmt.Errorf("receive message: %w", err)
+				return fmt.Errorf("receive message err: %w", ErrWalError)
 			}
 
 			if pgErr, ok := rawMsg.(*pgproto3.ErrorResponse); ok {
