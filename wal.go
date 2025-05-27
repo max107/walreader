@@ -2,7 +2,6 @@ package walreader
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -213,7 +212,7 @@ func (w *Listener) Start(ctx context.Context, cb Callback) error {
 	return nil
 }
 
-func (w *Listener) listenWal(ctx context.Context) error { //nolint:gocognit,cyclop
+func (w *Listener) listenWal(ctx context.Context) error { //nolint:gocognit
 	lastWrittenLSN, err := findOffset(
 		ctx,
 		w.conn,
@@ -230,8 +229,6 @@ func (w *Listener) listenWal(ctx context.Context) error { //nolint:gocognit,cycl
 		return fmt.Errorf("could not start replication: %w", err)
 	}
 
-	deadline := time.Now().Add(w.timeout)
-
 	// whenever we get StreamStartMessage we set inStream to true and then pass it to DecodeV2 function
 	// on StreamStopMessage we set it back to false
 	inStream := false
@@ -242,31 +239,8 @@ func (w *Listener) listenWal(ctx context.Context) error { //nolint:gocognit,cycl
 			close(w.ch)
 			return nil
 		default:
-			if time.Now().After(deadline) {
-				if err := commit(
-					ctx,
-					w.conn,
-					lastWrittenLSN,
-				); err != nil {
-					return err
-				}
-
-				deadline = time.Now().Add(w.timeout)
-			}
-
-			ctx, cancel := context.WithDeadline(ctx, deadline)
 			rawMsg, err := w.conn.ReceiveMessage(ctx)
-			cancel()
-
 			if err != nil {
-				if pgconn.Timeout(err) {
-					continue
-				}
-
-				if errors.Is(err, context.Canceled) {
-					return nil
-				}
-
 				return fmt.Errorf("receive message: %w", err)
 			}
 
@@ -288,10 +262,6 @@ func (w *Listener) listenWal(ctx context.Context) error { //nolint:gocognit,cycl
 
 				if pkm.ServerWALEnd > lastWrittenLSN {
 					lastWrittenLSN = pkm.ServerWALEnd
-				}
-
-				if pkm.ReplyRequested {
-					deadline = time.Time{}
 				}
 
 			case pglogrepl.XLogDataByteID:
