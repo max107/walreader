@@ -236,6 +236,10 @@ func (w *Listener) listenWal(ctx context.Context) error { //nolint:gocognit,cycl
 			close(w.ch)
 			return nil
 		default:
+			if err := w.conn.Ping(ctx); err != nil {
+				return err
+			}
+
 			if time.Now().After(deadline) {
 				if err := commit(
 					ctx,
