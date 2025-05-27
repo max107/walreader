@@ -2,6 +2,7 @@ package walreader
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -189,7 +190,6 @@ func (w *Listener) Start(ctx context.Context, cb Callback) error {
 		for {
 			select {
 			case <-ctx.Done():
-				close(w.ch)
 				return nil
 
 			case <-ticker.C:
@@ -215,6 +215,18 @@ func (w *Listener) Start(ctx context.Context, cb Callback) error {
 	}
 
 	return nil
+}
+
+func (w *Listener) next(ctx context.Context) (pgproto3.BackendMessage, error) {
+	ctx, cancel := context.WithTimeout(ctx, w.timeout)
+	defer cancel()
+
+	rawMsg, err := w.conn.ReceiveMessage(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("receive message: %w", err)
+	}
+
+	return rawMsg, nil
 }
 
 func (w *Listener) listenWal(ctx context.Context) error { //nolint:gocognit
@@ -244,13 +256,18 @@ func (w *Listener) listenWal(ctx context.Context) error { //nolint:gocognit
 			close(w.ch)
 			return nil
 		default:
-			rawMsg, err := w.conn.ReceiveMessage(ctx)
+			rawMsg, err := w.next(ctx)
 			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					// read timeout
+					continue
+				}
+
 				return fmt.Errorf("receive message: %w", err)
 			}
 
-			if _, ok := rawMsg.(*pgproto3.ErrorResponse); ok {
-				return fmt.Errorf("received error response: %w", ErrWalError)
+			if pgErr, ok := rawMsg.(*pgproto3.ErrorResponse); ok {
+				return fmt.Errorf("%w: %s", ErrWalError, pgErr.Message)
 			}
 
 			msg, ok := rawMsg.(*pgproto3.CopyData)
