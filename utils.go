@@ -1,13 +1,20 @@
 package walreader
 
 import (
+	"fmt"
+
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func decodeTextColumnData(typeMap *pgtype.Map, data []byte, dataType uint32) (interface{}, error) {
 	if dt, ok := typeMap.TypeForOID(dataType); ok {
-		return dt.Codec.DecodeValue(typeMap, dataType, pgtype.TextFormatCode, data)
+		val, err := dt.Codec.DecodeValue(typeMap, dataType, pgtype.TextFormatCode, data)
+		if err != nil {
+			return nil, fmt.Errorf("could not decode value: %w", err)
+		}
+
+		return val, nil
 	}
 
 	return string(data), nil
@@ -29,7 +36,7 @@ func extractValues(
 		case 't': // text
 			val, err := decodeTextColumnData(typeMap, col.Data, rel.Columns[idx].DataType)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("could not decode text column data: %w", err)
 			}
 			values[colName] = val
 		}
