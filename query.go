@@ -369,7 +369,7 @@ func query(
 		return nil, err
 	}
 
-	var result []string
+	result := make([]string, 0)
 
 	for i, row := range rows {
 		if row.Err != nil {

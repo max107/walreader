@@ -18,6 +18,7 @@ func TestWalReader(t *testing.T) {
 	if dsn == "" {
 		dsn = "postgres://postgres:postgres@localhost:5432/app?replication=database&application_name=walreader_y1_prod"
 	}
+
 	config, err := pgx.ParseConfig(dsn)
 	require.NoError(t, err)
 

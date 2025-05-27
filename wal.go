@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pglogrepl"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -19,8 +20,7 @@ const outputPlugin = "pgoutput"
 type Callback func(e []*Event) error
 
 func NewListener(
-	conn *pgconn.PgConn,
-	typeMap *pgtype.Map,
+	pgxConn *pgx.Conn,
 	slotName string,
 	schema string,
 	tables []string,
@@ -30,8 +30,9 @@ func NewListener(
 	}
 
 	return &Listener{
-		conn:      conn,
-		typeMap:   typeMap,
+		pgxConn:   pgxConn,
+		conn:      pgxConn.PgConn(),
+		typeMap:   pgxConn.TypeMap(),
 		slotName:  slotName,
 		relations: make(map[uint32]*pglogrepl.RelationMessageV2),
 		timeout:   time.Second * 10,
@@ -43,6 +44,7 @@ func NewListener(
 }
 
 type Listener struct {
+	pgxConn     *pgx.Conn
 	conn        *pgconn.PgConn
 	typeMap     *pgtype.Map
 	slotName    string
@@ -55,6 +57,10 @@ type Listener struct {
 	lsn         pglogrepl.LSN
 	ch          chan *Event
 	events      []*Event
+}
+
+func (w *Listener) Health(ctx context.Context) error {
+	return w.pgxConn.Ping(ctx)
 }
 
 func (w *Listener) Clean(ctx context.Context) error {

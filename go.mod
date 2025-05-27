@@ -1,6 +1,6 @@
 module github.com/max107/walreader
 
-go 1.23.0
+go 1.24.3
 
 require (
 	github.com/jackc/pglogrepl v0.0.0-20250509230407-a9884f6bd75a
