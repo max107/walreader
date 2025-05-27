@@ -167,6 +167,11 @@ func (w *Listener) flush(ctx context.Context, cb Callback) error {
 }
 
 func (w *Listener) Start(ctx context.Context, cb Callback) error {
+	// force shutdown previous backend pid
+	if err := w.Shutdown(ctx); err != nil {
+		return fmt.Errorf("could not shutdown previous pid: %w", err)
+	}
+
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
