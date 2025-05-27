@@ -1,7 +1,6 @@
 package walreader_test
 
 import (
-	"context"
 	"os"
 	"os/signal"
 	"sync"
@@ -14,194 +13,146 @@ import (
 	"github.com/max107/walreader"
 )
 
-func TestAllTables(t *testing.T) {
-	ctx := context.TODO()
-
-	config, err := pgx.ParseConfig(os.Getenv("DATABASE_URL"))
+func TestWalReader(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://postgres:postgres@localhost:5432/app?replication=database&application_name=walreader_y1_prod"
+	}
+	config, err := pgx.ParseConfig(dsn)
 	require.NoError(t, err)
 
-	conn, err := pgx.ConnectConfig(ctx, config)
+	conn, err := pgx.ConnectConfig(t.Context(), config)
 	require.NoError(t, err)
 
 	googleuuid.Register(conn.TypeMap())
 
 	t.Cleanup(func() {
-		_ = conn.Close(ctx)
+		_ = conn.Close(t.Context())
 	})
 
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, os.Kill)
-	defer stop()
+	t.Run("walreader", func(t *testing.T) {
+		ctx, stop := signal.NotifyContext(t.Context(), os.Interrupt, os.Kill)
+		defer stop()
 
-	sqls := []string{
-		`drop table if exists numbers;`,
-		`drop table if exists words;`,
-		`create table numbers (number int);`,
-		`create table words (word varchar(255));`,
-	}
-
-	for _, sql := range sqls {
-		_, err := conn.Exec(ctx, sql)
-		require.NoError(t, err)
-	}
-
-	inserts := []string{
-		`insert into numbers (number) values (1), (2), (3);`,
-		`insert into words (word) values ('foo'), ('bar');`,
-	}
-
-	listener := walreader.NewListener(
-		conn.PgConn(),
-		conn.TypeMap(),
-		"words_slot",
-		"public",
-		nil,
-	)
-
-	require.NoError(t, listener.Clean(ctx))
-	require.NoError(t, listener.Init(ctx))
-
-	for _, sql := range inserts {
-		_, err := conn.Exec(ctx, sql)
-		require.NoError(t, err)
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(5)
-
-	go func() {
-		if err := listener.Start(ctx, func(events []*walreader.Event) error {
-			for range events {
-				wg.Done()
-			}
-
-			return nil
-		}); err != nil {
-			t.Failed()
+		sqls := []string{
+			`drop table if exists numbers;`,
+			`drop table if exists words;`,
+			`create table numbers (number int);`,
+			`create table words (word varchar(255));`,
 		}
-	}()
 
-	wg.Wait()
-}
-
-func TestSpecificTables(t *testing.T) {
-	ctx := context.TODO()
-
-	config, err := pgx.ParseConfig(os.Getenv("DATABASE_URL"))
-	require.NoError(t, err)
-
-	conn, err := pgx.ConnectConfig(ctx, config)
-	require.NoError(t, err)
-
-	googleuuid.Register(conn.TypeMap())
-
-	t.Cleanup(func() {
-		_ = conn.Close(ctx)
-	})
-
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, os.Kill)
-	defer stop()
-
-	sqls := []string{
-		`drop table if exists numbers;`,
-		`drop table if exists words;`,
-		`create table numbers (number int);`,
-		`create table words (word varchar(255));`,
-	}
-
-	for _, sql := range sqls {
-		_, err := conn.Exec(ctx, sql)
-		require.NoError(t, err)
-	}
-
-	inserts := []string{
-		`insert into numbers (number) values (1), (2), (3);`,
-		`insert into words (word) values ('foo'), ('bar');`,
-	}
-
-	listener := walreader.NewListener(
-		conn.PgConn(),
-		conn.TypeMap(),
-		"numbers_slot",
-		"public",
-		[]string{"numbers"},
-	)
-
-	require.NoError(t, listener.Clean(ctx))
-	require.NoError(t, listener.Init(ctx))
-
-	for _, sql := range inserts {
-		_, err := conn.Exec(ctx, sql)
-		require.NoError(t, err)
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(3)
-
-	go func() {
-		if err := listener.Start(ctx, func(events []*walreader.Event) error {
-			for range events {
-				wg.Done()
-			}
-
-			return nil
-		}); err != nil {
-			t.Failed()
+		for _, sql := range sqls {
+			_, err := conn.Exec(ctx, sql)
+			require.NoError(t, err)
 		}
-	}()
 
-	wg.Wait()
-}
+		inserts := []string{
+			`insert into numbers (number) values (1), (2), (3);`,
+			`insert into words (word) values ('foo'), ('bar');`,
+		}
 
-func TestAlterSchema(t *testing.T) {
-	ctx := context.TODO()
+		listener := walreader.NewListener(
+			conn,
+			"words_slot",
+			"public",
+			nil,
+		)
 
-	config, err := pgx.ParseConfig(os.Getenv("DATABASE_URL"))
-	require.NoError(t, err)
+		require.NoError(t, listener.Clean(ctx))
+		require.NoError(t, listener.Init(ctx))
 
-	conn, err := pgx.ConnectConfig(ctx, config)
-	require.NoError(t, err)
+		for _, sql := range inserts {
+			_, err := conn.Exec(ctx, sql)
+			require.NoError(t, err)
+		}
 
-	googleuuid.Register(conn.TypeMap())
+		var wg sync.WaitGroup
+		wg.Add(5)
 
-	t.Cleanup(func() {
-		_ = conn.Close(ctx)
+		go func() {
+			if err := listener.Start(ctx, func(events []*walreader.Event) error {
+				for range events {
+					wg.Done()
+				}
+
+				return nil
+			}); err != nil {
+				t.Failed()
+			}
+		}()
+
+		wg.Wait()
 	})
 
-	listener := walreader.NewListener(
-		conn.PgConn(),
-		conn.TypeMap(),
-		"numbers_slot",
-		"public",
-		nil,
-	)
+	t.Run("specific_table", func(t *testing.T) {
+		ctx, stop := signal.NotifyContext(t.Context(), os.Interrupt, os.Kill)
+		defer stop()
 
-	require.NoError(t, listener.Init(ctx))
-	require.NoError(t, listener.Init(ctx))
-}
+		sqls := []string{
+			`drop table if exists numbers;`,
+			`drop table if exists words;`,
+			`create table numbers (number int);`,
+			`create table words (word varchar(255));`,
+		}
 
-func TestAlterTables(t *testing.T) {
-	ctx := context.TODO()
+		for _, sql := range sqls {
+			_, err := conn.Exec(ctx, sql)
+			require.NoError(t, err)
+		}
 
-	config, err := pgx.ParseConfig(os.Getenv("DATABASE_URL"))
-	require.NoError(t, err)
+		inserts := []string{
+			`insert into numbers (number) values (1), (2), (3);`,
+			`insert into words (word) values ('foo'), ('bar');`,
+		}
 
-	conn, err := pgx.ConnectConfig(ctx, config)
-	require.NoError(t, err)
+		listener := walreader.NewListener(
+			conn,
+			"numbers_slot",
+			"public",
+			[]string{"numbers"},
+		)
 
-	googleuuid.Register(conn.TypeMap())
+		require.NoError(t, listener.Clean(ctx))
+		require.NoError(t, listener.Init(ctx))
 
-	t.Cleanup(func() {
-		_ = conn.Close(ctx)
+		for _, sql := range inserts {
+			_, err := conn.Exec(ctx, sql)
+			require.NoError(t, err)
+		}
+
+		var wg sync.WaitGroup
+		wg.Add(3)
+
+		go func() {
+			if err := listener.Start(ctx, func(events []*walreader.Event) error {
+				for range events {
+					wg.Done()
+				}
+
+				return nil
+			}); err != nil {
+				t.Failed()
+			}
+		}()
+
+		wg.Wait()
 	})
 
-	listener := walreader.NewListener(
-		conn.PgConn(),
-		conn.TypeMap(),
-		"numbers_slot",
-		"public",
-		[]string{"numbers"},
-	)
+	t.Run("alter", func(t *testing.T) {
+		// alter schema
+		require.NoError(t, walreader.NewListener(
+			conn,
+			"numbers_slot",
+			"public",
+			nil,
+		).Init(t.Context()))
 
-	require.NoError(t, listener.Init(ctx))
-	require.NoError(t, listener.Init(ctx))
+		// alter table
+		require.NoError(t, walreader.NewListener(
+			conn,
+			"numbers_slot",
+			"public",
+			[]string{"numbers"},
+		).Init(t.Context()))
+	})
 }
