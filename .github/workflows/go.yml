@@ -8,6 +8,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
     services:
+      postgres17:
+        image: bitnami/postgresql:17
+        env:
+          POSTGRESQL_PASSWORD: postgres
+          POSTGRESQL_DATABASE: app
+          POSTGRESQL_WAL_LEVEL: logical
+        ports:
+          - 5432:5432
       postgres16:
         image: bitnami/postgresql:16
         env:
@@ -16,37 +24,17 @@ jobs:
           POSTGRESQL_WAL_LEVEL: logical
         ports:
           - 5432:5432
-      postgres15:
-        image: bitnami/postgresql:15
-        env:
-          POSTGRESQL_PASSWORD: postgres
-          POSTGRESQL_DATABASE: app
-          POSTGRESQL_WAL_LEVEL: logical
-        ports:
-          - 5433:5432
-      postgres14:
-        image: bitnami/postgresql:15
-        env:
-          POSTGRESQL_PASSWORD: postgres
-          POSTGRESQL_DATABASE: app
-          POSTGRESQL_WAL_LEVEL: logical
-        ports:
-          - 5434:5432
     steps:
       - uses: actions/checkout@v4
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.23'
-      - name: test pgsql16
+          go-version: '1.24'
+      - name: test pgsql17
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/app?replication=database&application_name=walreader1
         run: go test -v -p 1 ./...
-      - name: test pgsql15
+      - name: test pgsql16
         env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5433/app?replication=database&application_name=walreader1
-        run: go test -v -p 1 ./...
-      - name: test pgsql14
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5434/app?replication=database&application_name=walreader1
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/app?replication=database&application_name=walreader1
         run: go test -v -p 1 ./...
