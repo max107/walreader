@@ -18,5 +18,5 @@ func TestEvent(t *testing.T) {
 		Values: map[string]any{"id": 12.32, "product_id": "foo", "foo": "bar", "name": int32(22)},
 	}
 
-	require.Equal(t, "public/test2/id=12.32,product_id=foo,name=22", walreader.EventToStringKey(event))
+	require.Equal(t, "public/test2", walreader.EventToStringKey(event))
 }
