@@ -1,7 +1,7 @@
 package walreader
 
 import (
-	"fmt"
+	"github.com/jackc/pglogrepl"
 	"strings"
 )
 
@@ -17,12 +17,12 @@ var (
 )
 
 type Event struct {
-	Type        EventType      `json:"type"`
-	Schema      string         `json:"namespace"`
-	Table       string         `json:"table"`
-	Values      map[string]any `json:"values"`
-	OldValues   map[string]any `json:"old_values"`
-	PrimaryKeys []string       `json:"primary_keys"`
+	Type      EventType      `json:"type"`
+	Schema    string         `json:"namespace"`
+	Table     string         `json:"table"`
+	Values    map[string]any `json:"values"`
+	OldValues map[string]any `json:"old_values"`
+	Offset    pglogrepl.LSN  `json:"-"`
 }
 
 func EventToStringKey(e *Event) string {
@@ -31,15 +31,6 @@ func EventToStringKey(e *Event) string {
 	}
 
 	var w strings.Builder
-
-	for i, val := range e.PrimaryKeys {
-		w.WriteString(val)
-		w.WriteString("=")
-		w.WriteString(fmt.Sprintf("%v", e.Values[val]))
-		if i != len(e.PrimaryKeys)-1 {
-			w.WriteByte(',')
-		}
-	}
 
 	id := w.String()
 	if len(id) > 0 {
