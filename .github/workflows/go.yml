@@ -23,7 +23,7 @@ jobs:
           POSTGRESQL_DATABASE: app
           POSTGRESQL_WAL_LEVEL: logical
         ports:
-          - 5432:5432
+          - 5433:5432
     steps:
       - uses: actions/checkout@v4
       - name: Set up Go
@@ -36,5 +36,5 @@ jobs:
         run: go test -v -p 1 ./...
       - name: test pgsql16
         env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/app?replication=database&application_name=walreader1
+          DATABASE_URL: postgres://postgres:postgres@localhost:5433/app?replication=database&application_name=walreader1
         run: go test -v -p 1 ./...
