@@ -37,10 +37,6 @@ type Listener struct {
 	lsn       pglogrepl.LSN
 }
 
-func (w *Listener) Health(ctx context.Context) error {
-	return w.pgxConn.Ping(ctx)
-}
-
 func (w *Listener) Shutdown(ctx context.Context) error {
 	return terminateBackend(ctx, w.pgxConn, w.slotName)
 }
