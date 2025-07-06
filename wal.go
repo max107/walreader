@@ -151,18 +151,6 @@ func (w *Listener) Start(ctx context.Context, ch chan<- *Event) error {
 	}
 }
 
-func (w *Listener) next(ctx context.Context) (pgproto3.BackendMessage, error) {
-	ctx, cancel := context.WithTimeout(ctx, w.timeout)
-	defer cancel()
-
-	rawMsg, err := w.conn.ReceiveMessage(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("receive message: %w", err)
-	}
-
-	return rawMsg, nil
-}
-
 func (w *Listener) createEvent(
 	relationID uint32,
 	newTuple *pglogrepl.TupleData,
