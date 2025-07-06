@@ -24,6 +24,7 @@ func NewListener(
 		slotName:  slotName,
 		relations: make(map[uint32]*pglogrepl.RelationMessageV2),
 		timeout:   time.Second * 10,
+		events:    make([]*Event, 0),
 	}
 }
 
@@ -35,32 +36,38 @@ type Listener struct {
 	relations map[uint32]*pglogrepl.RelationMessageV2
 	timeout   time.Duration
 	lsn       pglogrepl.LSN
+	events    []*Event
 }
 
 func (w *Listener) Shutdown(ctx context.Context) error {
 	return terminateBackend(ctx, w.pgxConn, w.slotName)
 }
 
-func (w *Listener) Commit(ctx context.Context, offset pglogrepl.LSN) error {
-	return pglogrepl.SendStandbyStatusUpdate(
+func (w *Listener) commit(ctx context.Context) error {
+	if err := pglogrepl.SendStandbyStatusUpdate(
 		ctx,
 		w.conn,
 		pglogrepl.StandbyStatusUpdate{
-			WALWritePosition: offset,
+			WALWritePosition: w.lsn,
 		},
-	)
+	); err != nil {
+		return fmt.Errorf("commit lsn error: %w", err)
+	}
+
+	w.events = make([]*Event, 0)
+
+	return nil
 }
 
 func (w *Listener) handleMsg(
 	ctx context.Context,
-	ch chan<- *Event,
-	lastWrittenLSN pglogrepl.LSN,
+	lastWrittenLSN *pglogrepl.LSN,
 	inStream *bool,
 	nextStandbyMessageDeadline time.Time,
-) error {
+) ([]*Event, error) {
 	if time.Now().After(nextStandbyMessageDeadline) {
-		if err := commit(ctx, w.conn, lastWrittenLSN); err != nil {
-			return fmt.Errorf("commit error: %w", err)
+		if err := commit(ctx, w.conn, *lastWrittenLSN); err != nil {
+			return nil, fmt.Errorf("commit error: %w", err)
 		}
 		nextStandbyMessageDeadline = time.Now().Add(w.timeout)
 	}
@@ -71,59 +78,63 @@ func (w *Listener) handleMsg(
 	rawMsg, err := w.conn.ReceiveMessage(ctx)
 	if err != nil {
 		if pgconn.Timeout(err) {
-			return nil
+			return nil, nil
 		}
 
 		if errors.Is(err, ctx.Err()) {
-			return nil
+			return nil, nil
 		}
 
-		return fmt.Errorf("receive message err: %w (%w)", ErrWalError, err)
+		return nil, fmt.Errorf("receive message err: %w (%w)", ErrWalError, err)
 	}
 
 	if pgErr, ok := rawMsg.(*pgproto3.ErrorResponse); ok {
-		return fmt.Errorf("%w: %s", ErrWalError, pgErr.Message)
+		return nil, fmt.Errorf("%w: %s", ErrWalError, pgErr.Message)
 	}
 
 	msg, ok := rawMsg.(*pgproto3.CopyData)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 
 	switch msg.Data[0] {
 	case pglogrepl.PrimaryKeepaliveMessageByteID:
 		pkm, err := pglogrepl.ParsePrimaryKeepaliveMessage(msg.Data[1:])
 		if err != nil {
-			return fmt.Errorf("could not parse primary keepalive message: %w", err)
+			return nil, fmt.Errorf("could not parse primary keepalive message: %w", err)
 		}
 
-		if pkm.ServerWALEnd > lastWrittenLSN {
-			lastWrittenLSN = pkm.ServerWALEnd
+		if pkm.ServerWALEnd > *lastWrittenLSN {
+			*lastWrittenLSN = pkm.ServerWALEnd
 		}
 
 	case pglogrepl.XLogDataByteID:
 		xld, err := pglogrepl.ParseXLogData(msg.Data[1:])
 		if err != nil {
-			return fmt.Errorf("could not parse XLogData: %w", err)
+			return nil, fmt.Errorf("could not parse XLogData: %w", err)
 		}
 
-		if err := w.process(
+		events, err := w.process(
 			xld.WALData,
 			inStream,
-			ch,
-		); err != nil {
-			return fmt.Errorf("could not process XLogData: %w", err)
+		)
+		if err != nil {
+			return nil, fmt.Errorf("could not process XLogData: %w", err)
 		}
 
-		if xld.WALStart > lastWrittenLSN {
-			lastWrittenLSN = xld.WALStart
+		if xld.WALStart > *lastWrittenLSN {
+			*lastWrittenLSN = xld.WALStart
 		}
+
+		return events, nil
 	}
 
-	return nil
+	return nil, nil
 }
 
-func (w *Listener) Start(ctx context.Context, ch chan<- *Event) error {
+type Callback func(event []*Event) error
+
+func (w *Listener) Start(ctx context.Context, cb Callback) error {
 	lastWrittenLSN, err := findOffset(ctx, w.conn)
 	if err != nil {
 		return fmt.Errorf("could not find offset: %w", err)
@@ -141,11 +152,21 @@ func (w *Listener) Start(ctx context.Context, ch chan<- *Event) error {
 	for {
 		select {
 		case <-ctx.Done():
-			close(ch)
 			return nil
 		default:
-			if err := w.handleMsg(ctx, ch, lastWrittenLSN, &inStream, nextStandbyMessageDeadline); err != nil {
+			events, err := w.handleMsg(ctx, &lastWrittenLSN, &inStream, nextStandbyMessageDeadline)
+			if err != nil {
 				return fmt.Errorf("could not handle message: %w", err)
+			}
+
+			if len(events) > 0 {
+				if err := cb(events); err != nil {
+					return fmt.Errorf("callback error: %w", err)
+				}
+
+				if err := w.commit(ctx); err != nil {
+					return fmt.Errorf("commit error: %w", err)
+				}
 			}
 		}
 	}
@@ -192,11 +213,12 @@ func (w *Listener) createEvent(
 func (w *Listener) process(
 	walData []byte,
 	inStream *bool,
-	ch chan<- *Event,
-) error {
+) ([]*Event, error) {
+	events := make([]*Event, 0)
+
 	logicalMsg, err := pglogrepl.ParseV2(walData, *inStream)
 	if err != nil {
-		return fmt.Errorf("could not parse WAL data: %w", err)
+		return nil, fmt.Errorf("could not parse WAL data: %w", err)
 	}
 
 	switch msg := logicalMsg.(type) {
@@ -214,9 +236,9 @@ func (w *Listener) process(
 			Insert,
 		)
 		if err != nil {
-			return fmt.Errorf("could not create event: %w", err)
+			return nil, fmt.Errorf("could not create event: %w", err)
 		}
-		ch <- event
+		events = append(events, event)
 
 	case *pglogrepl.UpdateMessageV2:
 		// if you need OldTuple
@@ -229,9 +251,9 @@ func (w *Listener) process(
 			Update,
 		)
 		if err != nil {
-			return fmt.Errorf("could not create event: %w", err)
+			return nil, fmt.Errorf("could not create event: %w", err)
 		}
-		ch <- event
+		events = append(events, event)
 
 	case *pglogrepl.DeleteMessageV2:
 		event, err := w.createEvent(
@@ -241,9 +263,9 @@ func (w *Listener) process(
 			Delete,
 		)
 		if err != nil {
-			return fmt.Errorf("could not create event: %w", err)
+			return nil, fmt.Errorf("could not create event: %w", err)
 		}
-		ch <- event
+		events = append(events, event)
 
 	case *pglogrepl.TruncateMessageV2:
 		for _, id := range msg.RelationIDs {
@@ -254,9 +276,9 @@ func (w *Listener) process(
 				Truncate,
 			)
 			if err != nil {
-				return fmt.Errorf("could not create event: %w", err)
+				return nil, fmt.Errorf("could not create event: %w", err)
 			}
-			ch <- event
+			events = append(events, event)
 		}
 
 	case *pglogrepl.StreamStartMessageV2:
@@ -266,5 +288,5 @@ func (w *Listener) process(
 		*inStream = false
 	}
 
-	return nil
+	return events, nil
 }

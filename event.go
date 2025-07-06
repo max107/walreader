@@ -1,7 +1,6 @@
 package walreader
 
 import (
-	"github.com/jackc/pglogrepl"
 	"strings"
 )
 
@@ -22,7 +21,6 @@ type Event struct {
 	Table     string         `json:"table"`
 	Values    map[string]any `json:"values"`
 	OldValues map[string]any `json:"old_values"`
-	Offset    pglogrepl.LSN  `json:"-"`
 }
 
 func EventToStringKey(e *Event) string {

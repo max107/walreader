@@ -3,6 +3,7 @@ package walreader
 import (
 	"context"
 	"fmt"
+
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"

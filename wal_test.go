@@ -3,13 +3,14 @@ package walreader_test
 import (
 	"context"
 	"fmt"
-	"github.com/jackc/pgx/v5"
-	"github.com/max107/walreader"
-	"github.com/stretchr/testify/require"
 	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/max107/walreader"
+	"github.com/stretchr/testify/require"
 )
 
 func TestWalReader(t *testing.T) {
@@ -25,9 +26,7 @@ func TestWalReader(t *testing.T) {
 		conn, err := pgx.ConnectConfig(t.Context(), config)
 		require.NoError(t, err)
 
-		prepare(t, conn, "all_slot")
-
-		sqls := []string{
+		prepare(t, conn, "all_slot", []string{
 			`drop table if exists words;`,
 			`drop table if exists numbers;`,
 			`create table numbers (number int);`,
@@ -39,52 +38,16 @@ func TestWalReader(t *testing.T) {
 			`create publication all_slot for table words;`,
 			`insert into numbers (number) values (1), (2), (3);`,
 			`insert into words (word) values ('foo'), ('bar');`,
-		}
+		})
 
-		for _, sql := range sqls {
-			_, err := conn.Exec(t.Context(), sql)
-			require.NoError(t, err)
-		}
-
-		listener := walreader.NewListener(conn, "all_slot")
-
-		ch := make(chan *walreader.Event)
-
-		var wg sync.WaitGroup
-		wg.Add(1)
-
-		ctx, cancel := context.WithCancel(t.Context())
-
-		go func() {
-			defer wg.Done()
-			require.NoError(t, listener.Start(ctx, ch))
-		}()
-
-		var i atomic.Int64
-		var found bool
-		for event := range ch {
-			i.Add(1)
-			require.Len(t, event.Values, 2)
-			require.NoError(t, listener.Commit(t.Context(), event.Offset))
-
-			if i.Load() == 2 {
-				found = true
-				break
-			}
-		}
-
-		require.True(t, found)
-		cancel()
-		wg.Wait()
+		walcheck(t, conn, "all_slot", 2)
 	})
 
 	t.Run("specific_table", func(t *testing.T) {
 		conn, err := pgx.ConnectConfig(t.Context(), config)
 		require.NoError(t, err)
 
-		prepare(t, conn, "words_slot")
-
-		sqls := []string{
+		prepare(t, conn, "words_slot", []string{
 			`drop table if exists words;`,
 			`drop table if exists numbers;`,
 			`create table numbers (number int);`,
@@ -96,52 +59,16 @@ func TestWalReader(t *testing.T) {
 			`create publication words_slot for table words;`,
 			`insert into numbers (number) values (1), (2), (3);`,
 			`insert into words (word, number) values ('foo', 1), ('bar', 2);`,
-		}
+		})
 
-		for _, sql := range sqls {
-			_, err := conn.Exec(t.Context(), sql)
-			require.NoError(t, err)
-		}
-
-		listener := walreader.NewListener(conn, "words_slot")
-
-		ch := make(chan *walreader.Event)
-
-		var wg sync.WaitGroup
-		wg.Add(1)
-
-		ctx, cancel := context.WithCancel(t.Context())
-
-		go func() {
-			defer wg.Done()
-			require.NoError(t, listener.Start(ctx, ch))
-		}()
-
-		var i atomic.Int64
-		var found bool
-		for event := range ch {
-			i.Add(1)
-			require.Len(t, event.Values, 2)
-			require.NoError(t, listener.Commit(t.Context(), event.Offset))
-
-			if i.Load() == 2 {
-				found = true
-				break
-			}
-		}
-
-		require.True(t, found)
-		cancel()
-		wg.Wait()
+		walcheck(t, conn, "words_slot", 2)
 	})
 
 	t.Run("specific_fields", func(t *testing.T) {
 		conn, err := pgx.ConnectConfig(t.Context(), config)
 		require.NoError(t, err)
 
-		prepare(t, conn, "specific_fields")
-
-		sqls := []string{
+		prepare(t, conn, "specific_fields", []string{
 			`drop table if exists words;`,
 			`create table words (word varchar(255), number int);`,
 			`alter table words replica identity full;`,
@@ -149,12 +76,7 @@ func TestWalReader(t *testing.T) {
 			`drop publication if exists specific_fields;`,
 			`create publication specific_fields for table words (word);`,
 			`insert into words (word, number) values ('foo', 1), ('bar', 2), ('baz', 3);`,
-		}
-
-		for _, sql := range sqls {
-			_, err := conn.Exec(t.Context(), sql)
-			require.NoError(t, err)
-		}
+		})
 
 		walcheck(t, conn, "specific_fields", 3)
 	})
@@ -165,42 +87,46 @@ func walcheck(t *testing.T, conn *pgx.Conn, name string, expect int64) {
 
 	listener := walreader.NewListener(conn, name)
 
-	ch := make(chan *walreader.Event)
-
 	var wg sync.WaitGroup
 	wg.Add(1)
 
 	ctx, cancel := context.WithCancel(t.Context())
 
-	go func() {
-		defer wg.Done()
-		require.NoError(t, listener.Start(ctx, ch))
-	}()
-
 	var i atomic.Int64
-	var found bool
-	for event := range ch {
+	cb := func(events []*walreader.Event) error { //nolint:unparam
 		i.Add(1)
-		require.Len(t, event.Values, 1)
-		require.NoError(t, listener.Commit(t.Context(), event.Offset))
-
-		if i.Load() == expect {
-			found = true
-			break
+		for _, event := range events {
+			require.NotEmpty(t, event.Values)
 		}
+		if i.Load() == expect {
+			cancel()
+		}
+		return nil
 	}
 
-	require.True(t, found)
-	cancel()
+	go func() {
+		defer wg.Done()
+		if err := listener.Start(ctx, cb); err != nil {
+			t.Fail()
+		}
+	}()
+
 	wg.Wait()
+	require.Equal(t, expect, i.Load())
 }
 
-func prepare(t *testing.T, conn *pgx.Conn, name string) {
+func prepare(t *testing.T, conn *pgx.Conn, name string, sqls []string) {
 	t.Helper()
+
 	for _, sql := range []string{
 		fmt.Sprintf(`select pg_terminate_backend(active_pid) from pg_replication_slots where slot_name = '%s';`, name),
 		fmt.Sprintf(`select pg_drop_replication_slot('%s');`, name),
 	} {
 		_, _ = conn.Exec(t.Context(), sql)
+	}
+
+	for _, sql := range sqls {
+		_, err := conn.Exec(t.Context(), sql)
+		require.NoError(t, err)
 	}
 }
