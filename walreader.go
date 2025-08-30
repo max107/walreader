@@ -23,14 +23,18 @@ type WALReader struct {
 	mu              sync.Mutex
 	publicationName string
 	slotName        string
+	state           *State
 }
 
 func New(
 	conn, helperConn *pgx.Conn,
 	publicationName, slotName string,
 ) *WALReader {
+	state := NewState()
+
 	return &WALReader{
-		stream:          NewStream(conn),
+		stream:          NewStream(conn, state),
+		state:           state,
 		helperConn:      helperConn,
 		publicationName: publicationName,
 		slotName:        slotName,
@@ -236,10 +240,6 @@ func (c *WALReader) metrics(ctx context.Context) {
 				continue
 			}
 
-			l.Debug().
-				Interface("info", slotInfo).
-				Msg("slot metrics")
-
 			slotActivityValue := 0.0
 			if slotInfo.Active {
 				slotActivityValue = 1.0
@@ -249,6 +249,9 @@ func (c *WALReader) metrics(ctx context.Context) {
 			slotConfirmedFlushLSN.Set(float64(slotInfo.ConfirmedFlushLSN))
 			slotRetainedWALSize.Set(float64(slotInfo.RetainedWALSize))
 			slotLag.Set(float64(slotInfo.Lag))
+
+			l.Debug().Msg("update lsn from ticker")
+			c.state.Set(slotInfo.CurrentLSN)
 		}
 	}
 }

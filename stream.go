@@ -37,12 +37,13 @@ type Stream struct {
 
 func NewStream(
 	conn *pgx.Conn,
+	state *State,
 ) *Stream {
 	return &Stream{
 		conn:      conn.PgConn(),
 		typeMap:   conn.TypeMap(),
 		stop:      make(chan struct{}, 1),
-		state:     NewState(),
+		state:     state,
 		relations: make(map[uint32]*pglogrepl.RelationMessageV2),
 	}
 }
@@ -106,7 +107,7 @@ func (s *Stream) readNext(ctx context.Context) (*pgproto3.CopyData, bool, error)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	receiveDeadline := time.Now().Add(time.Millisecond * 300)
+	receiveDeadline := time.Now().Add(time.Second)
 	msgCtx, cancel := context.WithDeadline(ctx, receiveDeadline)
 	rawMsg, err := s.conn.ReceiveMessage(msgCtx)
 	cancel()
@@ -116,12 +117,13 @@ func (s *Stream) readNext(ctx context.Context) (*pgproto3.CopyData, bool, error)
 		}
 
 		if pgconn.Timeout(err) {
+			l.Debug().Msg("timeout reached, send stand by status update")
 			if err := SendStandbyStatusUpdate(ctx, s.conn, s.state.Load()); err != nil {
 				l.Err(err).Msg("send stand by status update")
 				return nil, false, err
 			}
 
-			l.Debug().Msg("timeout received, skip send stand by status update")
+			l.Debug().Msg("timeout received, status update, skip to next iteration")
 			return nil, true, nil
 		}
 
