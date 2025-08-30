@@ -53,7 +53,7 @@ func main() {
 	}
 }
 
-func FilteredMapper(messages chan Message) walreader.CallbackFn {
+func FilteredMapper(messages chan Message) walreader.SingleCallbackFn {
 	upsertQuery := "INSERT INTO users (id, name) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET name = excluded.name;"
 	deleteQuery := "DELETE FROM users WHERE id = $1;"
 

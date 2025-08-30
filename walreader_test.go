@@ -64,6 +64,91 @@ func TestBatch(t *testing.T) {
 	})
 }
 
+func TestManualAck(t *testing.T) {
+	ctx := createLogger(t)
+
+	t.Run("single_manual_ack", func(t *testing.T) {
+		connector, name := newReader(t)
+
+		prepare(t, []string{
+			`create table books (id serial primary key, name text not null);`,
+			fmt.Sprintf(`drop publication if exists %s;`, name),
+			fmt.Sprintf(`create publication %s for table books;`, name),
+			fmt.Sprintf(`select pg_create_logical_replication_slot('%s', 'pgoutput');`, name),
+			`insert into books (id, name) values (1, 'book-1'), (2, 'book-2'), (3, 'book-3'), (4, 'book-4'), (5, 'book-5');`,
+		})
+		messageCh := make(chan *walreader.Event)
+
+		require.Zero(t, connector.LSN())
+
+		var lastAck walreader.AckFunc
+		done := make(chan struct{}, 1)
+		count := 0
+
+		go func() {
+			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event, ack walreader.AckFunc) error {
+				messageCh <- event
+				lastAck = ack
+				count += 1
+				if count == 5 {
+					done <- struct{}{}
+				}
+				return nil
+			}); err != nil {
+				t.Fail()
+			}
+		}()
+
+		for i := range 5 {
+			m := <-messageCh
+			require.Equal(t, int32(i+1), m.Values["id"]) //nolint:gosec
+			require.Equal(t, fmt.Sprintf("book-%d", i+1), m.Values["name"])
+		}
+
+		<-done
+		require.Zero(t, connector.LSN())
+		require.Equal(t, int64(5), connector.WaitAck())
+		require.NoError(t, lastAck())
+		require.Zero(t, connector.WaitAck())
+		require.NotZero(t, connector.LSN())
+
+		require.InEpsilon(t, 5.0, promValue(t, "insert"), 0)
+		require.NoError(t, connector.Close(ctx))
+	})
+
+	t.Run("batch_manual_ack", func(t *testing.T) {
+		connector, name := newReader(t)
+
+		prepare(t, []string{
+			`create table books (id serial primary key, name text not null);`,
+			fmt.Sprintf(`drop publication if exists %s;`, name),
+			fmt.Sprintf(`create publication %s for table books;`, name),
+			fmt.Sprintf(`select pg_create_logical_replication_slot('%s', 'pgoutput');`, name),
+			`insert into books (id, name) values (1, 'book-1'), (2, 'book-2'), (3, 'book-3'), (4, 'book-4'), (5, 'book-5');`,
+		})
+
+		require.Zero(t, connector.LSN())
+		done := make(chan struct{}, 1)
+
+		go func() {
+			if err := connector.Batch(ctx, 10, 300*time.Millisecond, func(_ context.Context, events []*walreader.Event) error {
+				done <- struct{}{}
+				return nil
+			}); err != nil {
+				t.Fail()
+			}
+		}()
+
+		<-done
+		time.Sleep(3 * time.Second)
+		require.Zero(t, connector.WaitAck())
+		require.NotZero(t, connector.LSN())
+
+		require.InEpsilon(t, 5.0, promValue(t, "insert"), 0)
+		require.NoError(t, connector.Close(ctx))
+	})
+}
+
 func TestBasic(t *testing.T) {
 	ctx := createLogger(t)
 

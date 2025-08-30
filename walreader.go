@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 )
@@ -84,7 +85,7 @@ WHERE slot_name = '%s';`,
 	return &slotInfo, nil
 }
 
-func (c *WALReader) Start(ctx context.Context, fn CallbackFn) error {
+func (c *WALReader) callback(ctx context.Context, fn internalFn) error {
 	l := log.Ctx(ctx)
 
 	slotInfo, err := c.SlotInfo(ctx)
@@ -114,6 +115,16 @@ func (c *WALReader) Start(ctx context.Context, fn CallbackFn) error {
 	return nil
 }
 
+func (c *WALReader) LSN() pglogrepl.LSN {
+	return c.state.GetLastAcked()
+}
+
+func (c *WALReader) Start(ctx context.Context, fn SingleCallbackFn) error {
+	return c.callback(ctx, func(ctx context.Context, event *EventContext) error {
+		return fn(ctx, event.event, event.ack)
+	})
+}
+
 func (c *WALReader) batchProcess(
 	ctx context.Context,
 	messages chan *EventContext,
@@ -126,6 +137,7 @@ func (c *WALReader) batchProcess(
 	var lastAck func() error
 
 	queue := make([]*Event, 0, bulkSize)
+
 	flush := func() error {
 		if err := fn(ctx, queue); err != nil {
 			l.Err(err).Msg("batch callback")
@@ -179,6 +191,10 @@ func (c *WALReader) batchProcess(
 	}
 }
 
+func (c *WALReader) WaitAck() int64 {
+	return c.stream.waitForAck.Load()
+}
+
 func (c *WALReader) Batch(
 	ctx context.Context,
 	size int,
@@ -202,12 +218,12 @@ func (c *WALReader) Batch(
 
 	defer close(messages)
 
-	if err := c.Start(ctx, func(ctx context.Context, event *Event, ack AckFunc) error {
+	if err := c.callback(ctx, func(ctx context.Context, event *EventContext) error {
 		select {
 		case err := <-errCh:
 			return err
 		default:
-			messages <- &EventContext{event: event, ack: ack}
+			messages <- event
 			return nil
 		}
 	}); err != nil {

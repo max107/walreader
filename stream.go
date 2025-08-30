@@ -21,18 +21,20 @@ var (
 	ErrSlotInUse       = errors.New("replication slot in use")
 )
 
-type CallbackFn func(ctx context.Context, event *Event, ack AckFunc) error
+type internalFn func(ctx context.Context, event *EventContext) error
+type SingleCallbackFn func(ctx context.Context, event *Event, ack AckFunc) error
 type BatchCallbackFn func(ctx context.Context, events []*Event) error
 type AckFunc func() error
 
 type Stream struct {
-	conn      *pgconn.PgConn
-	typeMap   *pgtype.Map
-	closed    atomic.Bool
-	state     *State
-	relations map[uint32]*pglogrepl.RelationMessageV2
-	stop      chan struct{}
-	mu        sync.Mutex
+	conn       *pgconn.PgConn
+	typeMap    *pgtype.Map
+	closed     atomic.Bool
+	state      *State
+	waitForAck atomic.Int64
+	relations  map[uint32]*pglogrepl.RelationMessageV2
+	stop       chan struct{}
+	mu         sync.Mutex
 }
 
 func NewStream(
@@ -62,7 +64,7 @@ func (s *Stream) startReplication(ctx context.Context, publicationName, slotName
 	return nil
 }
 
-func (s *Stream) Open(ctx context.Context, fn CallbackFn) error {
+func (s *Stream) Open(ctx context.Context, fn internalFn) error {
 	l := log.Ctx(ctx)
 	l.Info().Msg("stream started")
 
@@ -94,7 +96,7 @@ func (s *Stream) Open(ctx context.Context, fn CallbackFn) error {
 			}
 
 			l.Debug().Msg("new sink context message received")
-			if err := fn(ctx, msgCtx.event, msgCtx.ack); err != nil {
+			if err := fn(ctx, msgCtx); err != nil {
 				l.Err(err).Send()
 				return err
 			}
@@ -117,13 +119,24 @@ func (s *Stream) readNext(ctx context.Context) (*pgproto3.CopyData, bool, error)
 		}
 
 		if pgconn.Timeout(err) {
-			l.Debug().Msg("timeout reached, send stand by status update")
+			// sync flag is required for synchronisation of current lsn processing
+			// if no new xld received, we should ack latest lsn from PG_CURRENT_WAL_LSN()
+			// if we receive new xld then we should wait for ack lsn from last processed message
+			waitAck := s.waitForAck.Load()
+			if waitAck > 0 {
+				l.Info().
+					Int64("wait_ack", waitAck).
+					Msg("timeout reached but some events already in queue, skip")
+				return nil, true, nil
+			}
+
+			l.Info().Int64("wait_ack", waitAck).Msg("timeout reached, send stand by status update")
 			if err := SendStandbyStatusUpdate(ctx, s.conn, s.state.Load()); err != nil {
 				l.Err(err).Msg("send stand by status update")
 				return nil, false, err
 			}
 
-			l.Debug().Msg("timeout received, status update, skip to next iteration")
+			l.Info().Int64("wait_ack", waitAck).Msg("timeout received, status update, skip to next iteration")
 			return nil, true, nil
 		}
 
@@ -232,19 +245,30 @@ func (s *Stream) parseMessage(ctx context.Context, xld pglogrepl.XLogData, inStr
 			totalTruncate.Add(1)
 		}
 
-		ch <- s.createEventContext(ctx, event, xld.WALStart)
+		ch <- s.buildEventContext(
+			ctx,
+			event,
+			xld.WALStart,
+			s.waitForAck.Add(1),
+		)
 	}
 
 	return nil
 }
 
-func (s *Stream) createEventContext(ctx context.Context, event *Event, lsn pglogrepl.LSN) *EventContext {
+func (s *Stream) buildEventContext(
+	ctx context.Context,
+	event *Event,
+	lsn pglogrepl.LSN,
+	current int64,
+) *EventContext {
 	l := log.Ctx(ctx)
 
 	start := time.Now()
 
 	return &EventContext{
-		event: event,
+		current: current,
+		event:   event,
 		ack: func() error {
 			s.mu.Lock()
 			defer s.mu.Unlock()
@@ -266,6 +290,9 @@ func (s *Stream) createEventContext(ctx context.Context, event *Event, lsn pglog
 				l.Err(err).Msg("ack error")
 				return err
 			}
+
+			s.waitForAck.Add(-current)
+			s.state.SetLastAcked(lsn)
 
 			return nil
 		},
