@@ -1,0 +1,21 @@
+name: walreader
+
+x-networks: &x-networks
+  networks:
+    - backend
+
+networks:
+  backend:
+    driver: bridge
+
+services:
+  pgsql:
+    <<: *x-networks
+    image: bitnami/postgresql:17
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRESQL_PASSWORD: postgres
+      POSTGRESQL_DATABASE: app
+      POSTGRESQL_WAL_LEVEL: logical
+      POSTGRESQL_FSYNC: off
