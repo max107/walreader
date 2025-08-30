@@ -11,9 +11,24 @@ func NewState() *State {
 }
 
 type State struct {
-	mu           sync.RWMutex
-	lsn          pglogrepl.LSN
-	lastAckedLSN pglogrepl.LSN
+	mu               sync.RWMutex
+	lsn              pglogrepl.LSN
+	lastAckedLSN     pglogrepl.LSN
+	lastConfirmedLSN pglogrepl.LSN
+}
+
+func (s *State) GetConfirmed() pglogrepl.LSN {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.lastConfirmedLSN
+}
+
+func (s *State) SetConfirmed(l pglogrepl.LSN) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.lastConfirmedLSN = l
 }
 
 func (s *State) GetLastAcked() pglogrepl.LSN {

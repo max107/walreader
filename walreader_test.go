@@ -79,7 +79,7 @@ func TestManualAck(t *testing.T) {
 		})
 		messageCh := make(chan *walreader.Event)
 
-		require.Zero(t, connector.LSN())
+		require.Zero(t, connector.GetLastAcked())
 
 		var lastAck walreader.AckFunc
 		done := make(chan struct{}, 1)
@@ -106,11 +106,11 @@ func TestManualAck(t *testing.T) {
 		}
 
 		<-done
-		require.Zero(t, connector.LSN())
+		require.Zero(t, connector.GetLastAcked())
 		require.Equal(t, int64(5), connector.WaitAck())
 		require.NoError(t, lastAck())
 		require.Zero(t, connector.WaitAck())
-		require.NotZero(t, connector.LSN())
+		require.NotZero(t, connector.GetLastAcked())
 
 		require.InEpsilon(t, 5.0, promValue(t, "insert"), 0)
 		require.NoError(t, connector.Close(ctx))
@@ -127,7 +127,7 @@ func TestManualAck(t *testing.T) {
 			`insert into books (id, name) values (1, 'book-1'), (2, 'book-2'), (3, 'book-3'), (4, 'book-4'), (5, 'book-5');`,
 		})
 
-		require.Zero(t, connector.LSN())
+		require.Zero(t, connector.GetLastAcked())
 		done := make(chan struct{}, 1)
 
 		go func() {
@@ -142,7 +142,52 @@ func TestManualAck(t *testing.T) {
 		<-done
 		time.Sleep(3 * time.Second)
 		require.Zero(t, connector.WaitAck())
-		require.NotZero(t, connector.LSN())
+		require.NotZero(t, connector.GetLastAcked())
+
+		require.InEpsilon(t, 5.0, promValue(t, "insert"), 0)
+		require.NoError(t, connector.Close(ctx))
+	})
+
+	t.Run("dont_change_lsn_if_queue_is_not_empty", func(t *testing.T) {
+		connector, name := newReader(t)
+
+		prepare(t, []string{
+			`create table books (id serial primary key, name text not null);`,
+			fmt.Sprintf(`drop publication if exists %s;`, name),
+			fmt.Sprintf(`create publication %s for table books;`, name),
+			fmt.Sprintf(`select pg_create_logical_replication_slot('%s', 'pgoutput');`, name),
+			`insert into books (id, name) values (1, 'book-1'), (2, 'book-2'), (3, 'book-3'), (4, 'book-4'), (5, 'book-5');`,
+		})
+
+		require.Zero(t, connector.GetConfirmed())
+		done := make(chan struct{}, 1)
+		count := 0
+		var lastAck walreader.AckFunc
+
+		go func() {
+			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event, ack walreader.AckFunc) error {
+				lastAck = ack
+				count += 1
+				if count == 5 {
+					done <- struct{}{}
+				}
+				return nil
+			}); err != nil {
+				t.Fail()
+			}
+		}()
+
+		<-done
+		require.Equal(t, int64(5), connector.WaitAck())
+		require.Zero(t, connector.GetConfirmed())
+
+		require.NoError(t, lastAck())
+		require.Zero(t, connector.WaitAck())
+		require.NotZero(t, connector.GetLastAcked())
+
+		time.Sleep(2 * time.Second)
+
+		require.NotZero(t, connector.GetConfirmed())
 
 		require.InEpsilon(t, 5.0, promValue(t, "insert"), 0)
 		require.NoError(t, connector.Close(ctx))

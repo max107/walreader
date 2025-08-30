@@ -115,8 +115,12 @@ func (c *WALReader) callback(ctx context.Context, fn internalFn) error {
 	return nil
 }
 
-func (c *WALReader) LSN() pglogrepl.LSN {
+func (c *WALReader) GetLastAcked() pglogrepl.LSN {
 	return c.state.GetLastAcked()
+}
+
+func (c *WALReader) GetConfirmed() pglogrepl.LSN {
+	return c.state.GetConfirmed()
 }
 
 func (c *WALReader) Start(ctx context.Context, fn SingleCallbackFn) error {

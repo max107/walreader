@@ -131,10 +131,13 @@ func (s *Stream) readNext(ctx context.Context) (*pgproto3.CopyData, bool, error)
 			}
 
 			l.Info().Int64("wait_ack", waitAck).Msg("timeout reached, send stand by status update")
-			if err := SendStandbyStatusUpdate(ctx, s.conn, s.state.Load()); err != nil {
+			currentLSN := s.state.Load()
+			if err := SendStandbyStatusUpdate(ctx, s.conn, currentLSN); err != nil {
 				l.Err(err).Msg("send stand by status update")
 				return nil, false, err
 			}
+
+			s.state.SetConfirmed(currentLSN)
 
 			l.Info().Int64("wait_ack", waitAck).Msg("timeout received, status update, skip to next iteration")
 			return nil, true, nil
@@ -270,6 +273,8 @@ func (s *Stream) buildEventContext(
 		current: current,
 		event:   event,
 		ack: func() error {
+			l.Info().Int64("queue", current).Uint64("lsn", uint64(lsn)).Msg("send ack")
+
 			s.mu.Lock()
 			defer s.mu.Unlock()
 

@@ -188,7 +188,7 @@ func createLogger(t *testing.T) context.Context {
 	t.Helper()
 
 	return log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).
-		Level(zerolog.WarnLevel).
+		Level(zerolog.InfoLevel).
 		With().
 		Caller().
 		Logger().
