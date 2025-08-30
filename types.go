@@ -18,9 +18,8 @@ const (
 )
 
 type EventContext struct {
-	event   *Event
-	ack     AckFunc
-	current int64
+	event *Event
+	ack   AckFunc
 }
 
 type Event struct {

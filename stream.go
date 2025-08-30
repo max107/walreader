@@ -248,59 +248,52 @@ func (s *Stream) parseMessage(ctx context.Context, xld pglogrepl.XLogData, inStr
 			totalTruncate.Add(1)
 		}
 
-		ch <- s.buildEventContext(
-			ctx,
-			event,
-			xld.WALStart,
-			s.waitForAck.Add(1),
-		)
+		ch <- &EventContext{
+			event: event,
+			ack:   s.createAck(ctx, s.waitForAck.Add(1), xld.WALStart),
+		}
 	}
 
 	return nil
 }
 
-func (s *Stream) buildEventContext(
+func (s *Stream) createAck(
 	ctx context.Context,
-	event *Event,
-	lsn pglogrepl.LSN,
 	current int64,
-) *EventContext {
+	lsn pglogrepl.LSN,
+) AckFunc {
 	l := log.Ctx(ctx)
 
 	start := time.Now()
 
-	return &EventContext{
-		current: current,
-		event:   event,
-		ack: func() error {
-			l.Info().Int64("queue", current).Uint64("lsn", uint64(lsn)).Msg("send ack")
+	return func() error {
+		l.Info().Int64("queue", current).Uint64("lsn", uint64(lsn)).Msg("send ack")
 
-			s.mu.Lock()
-			defer s.mu.Unlock()
+		s.mu.Lock()
+		defer s.mu.Unlock()
 
-			if s.closed.Load() {
-				l.Debug().
-					Str("lsn", lsn.String()).
-					Msg("connection already closed, skip ack")
-				return nil
-			}
-
-			processLatency.Set(float64(time.Since(start).Nanoseconds()))
-
+		if s.closed.Load() {
 			l.Debug().
 				Str("lsn", lsn.String()).
-				Msg("send stand by status update")
-
-			if err := SendStandbyStatusUpdate(ctx, s.conn, lsn); err != nil {
-				l.Err(err).Msg("ack error")
-				return err
-			}
-
-			s.waitForAck.Add(-current)
-			s.manager.Acked().Set(lsn)
-
+				Msg("connection already closed, skip ack")
 			return nil
-		},
+		}
+
+		processLatency.Set(float64(time.Since(start).Nanoseconds()))
+
+		l.Debug().
+			Str("lsn", lsn.String()).
+			Msg("send stand by status update")
+
+		if err := SendStandbyStatusUpdate(ctx, s.conn, lsn); err != nil {
+			l.Err(err).Msg("ack error")
+			return err
+		}
+
+		s.waitForAck.Add(-current)
+		s.manager.Acked().Set(lsn)
+
+		return nil
 	}
 }
 
