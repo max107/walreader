@@ -123,7 +123,7 @@ func (c *WALReader) GetConfirmed() pglogrepl.LSN {
 	return c.manager.Confirmed().Get()
 }
 
-func (c *WALReader) Start(ctx context.Context, fn SingleCallbackFn) error {
+func (c *WALReader) Start(ctx context.Context, fn SingleFn) error {
 	return c.callback(ctx, func(ctx context.Context, event *EventContext) error {
 		return fn(ctx, event.event, event.ack)
 	})
@@ -134,7 +134,7 @@ func (c *WALReader) batchProcess(
 	messages chan *EventContext,
 	bulkSize int,
 	timeout time.Duration,
-	fn BatchCallbackFn,
+	fn BatchFn,
 ) error {
 	l := log.Ctx(ctx)
 
@@ -143,16 +143,12 @@ func (c *WALReader) batchProcess(
 	queue := make([]*Event, 0, bulkSize)
 
 	flush := func() error {
-		if err := fn(ctx, queue); err != nil {
+		if err := fn(ctx, queue, lastAck); err != nil {
 			l.Err(err).Msg("batch callback")
 			return err
 		}
 
 		queue = make([]*Event, 0, bulkSize)
-		if err := lastAck(); err != nil {
-			l.Err(err).Msg("ack")
-			return err
-		}
 
 		return nil
 	}
@@ -203,7 +199,7 @@ func (c *WALReader) Batch(
 	ctx context.Context,
 	size int,
 	timeout time.Duration,
-	fn BatchCallbackFn,
+	fn BatchFn,
 ) error {
 	l := log.Ctx(ctx)
 

@@ -21,11 +21,6 @@ var (
 	ErrSlotInUse       = errors.New("replication slot in use")
 )
 
-type internalFn func(ctx context.Context, event *EventContext) error
-type SingleCallbackFn func(ctx context.Context, event *Event, ack AckFunc) error
-type BatchCallbackFn func(ctx context.Context, events []*Event) error
-type AckFunc func() error
-
 type Stream struct {
 	conn       *pgconn.PgConn
 	typeMap    *pgtype.Map

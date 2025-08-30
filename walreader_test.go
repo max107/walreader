@@ -37,7 +37,7 @@ func TestBatch(t *testing.T) {
 				ctx,
 				4,
 				200*time.Millisecond,
-				func(_ context.Context, events []*walreader.Event) error {
+				func(_ context.Context, events []*walreader.Event, _ walreader.AckFunc) error {
 					callCount += 1
 					ids := make([]int32, 0, len(events))
 					for _, event := range events {
@@ -129,18 +129,26 @@ func TestManualAck(t *testing.T) {
 
 		require.Zero(t, connector.GetLastAcked())
 		done := make(chan struct{}, 1)
+		var latestAck walreader.AckFunc
 
 		go func() {
-			if err := connector.Batch(ctx, 10, 300*time.Millisecond, func(_ context.Context, events []*walreader.Event) error {
-				done <- struct{}{}
-				return nil
-			}); err != nil {
+			if err := connector.Batch(
+				ctx,
+				10,
+				300*time.Millisecond,
+				func(_ context.Context, events []*walreader.Event, ack walreader.AckFunc) error {
+					latestAck = ack
+					done <- struct{}{}
+					return nil
+				},
+			); err != nil {
 				t.Fail()
 			}
 		}()
 
 		<-done
-		time.Sleep(3 * time.Second)
+
+		require.NoError(t, latestAck())
 		require.Zero(t, connector.WaitAck())
 		require.NotZero(t, connector.GetLastAcked())
 

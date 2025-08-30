@@ -1,10 +1,18 @@
 package walreader
 
 import (
+	"context"
 	"time"
 
 	"github.com/jackc/pglogrepl"
 )
+
+type internalFn func(ctx context.Context, event *EventContext) error
+
+type SingleFn func(ctx context.Context, event *Event, ack AckFunc) error
+type BatchFn func(ctx context.Context, events []*Event, ack AckFunc) error
+
+type AckFunc func() error
 
 type EventType string
 
