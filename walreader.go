@@ -24,18 +24,18 @@ type WALReader struct {
 	mu              sync.Mutex
 	publicationName string
 	slotName        string
-	state           *State
+	manager         *StateManager
 }
 
 func New(
 	conn, helperConn *pgx.Conn,
 	publicationName, slotName string,
 ) *WALReader {
-	state := NewState()
+	manager := NewStateManager()
 
 	return &WALReader{
-		stream:          NewStream(conn, state),
-		state:           state,
+		stream:          NewStream(conn, manager),
+		manager:         manager,
 		helperConn:      helperConn,
 		publicationName: publicationName,
 		slotName:        slotName,
@@ -116,11 +116,11 @@ func (c *WALReader) callback(ctx context.Context, fn internalFn) error {
 }
 
 func (c *WALReader) GetLastAcked() pglogrepl.LSN {
-	return c.state.GetLastAcked()
+	return c.manager.Acked().Get()
 }
 
 func (c *WALReader) GetConfirmed() pglogrepl.LSN {
-	return c.state.GetConfirmed()
+	return c.manager.Confirmed().Get()
 }
 
 func (c *WALReader) Start(ctx context.Context, fn SingleCallbackFn) error {
@@ -271,7 +271,8 @@ func (c *WALReader) metrics(ctx context.Context) {
 			slotLag.Set(float64(slotInfo.Lag))
 
 			l.Debug().Msg("update lsn from ticker")
-			c.state.Set(slotInfo.CurrentLSN)
+
+			c.manager.Latest().Set(slotInfo.CurrentLSN)
 		}
 	}
 }

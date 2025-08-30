@@ -30,22 +30,22 @@ type Stream struct {
 	conn       *pgconn.PgConn
 	typeMap    *pgtype.Map
 	closed     atomic.Bool
-	state      *State
 	waitForAck atomic.Int64
 	relations  map[uint32]*pglogrepl.RelationMessageV2
 	stop       chan struct{}
 	mu         sync.Mutex
+	manager    *StateManager
 }
 
 func NewStream(
 	conn *pgx.Conn,
-	state *State,
+	manager *StateManager,
 ) *Stream {
 	return &Stream{
 		conn:      conn.PgConn(),
 		typeMap:   conn.TypeMap(),
 		stop:      make(chan struct{}, 1),
-		state:     state,
+		manager:   manager,
 		relations: make(map[uint32]*pglogrepl.RelationMessageV2),
 	}
 }
@@ -131,13 +131,13 @@ func (s *Stream) readNext(ctx context.Context) (*pgproto3.CopyData, bool, error)
 			}
 
 			l.Info().Int64("wait_ack", waitAck).Msg("timeout reached, send stand by status update")
-			currentLSN := s.state.Load()
+			currentLSN := s.manager.Latest().Get()
 			if err := SendStandbyStatusUpdate(ctx, s.conn, currentLSN); err != nil {
 				l.Err(err).Msg("send stand by status update")
 				return nil, false, err
 			}
 
-			s.state.SetConfirmed(currentLSN)
+			s.manager.Confirmed().Set(currentLSN)
 
 			l.Info().Int64("wait_ack", waitAck).Msg("timeout received, status update, skip to next iteration")
 			return nil, true, nil
@@ -221,7 +221,7 @@ func (s *Stream) parseMessage(ctx context.Context, xld pglogrepl.XLogData, inStr
 		Str("walEnd", xld.ServerWALEnd.String()).
 		Msg("wal received")
 
-	s.state.Set(xld.WALStart)
+	s.manager.Latest().Set(xld.WALStart)
 	cdcLatency.Set(float64(time.Now().UTC().Sub(xld.ServerTime).Nanoseconds()))
 
 	logicalMsg, err := pglogrepl.ParseV2(xld.WALData, inStream)
@@ -297,7 +297,7 @@ func (s *Stream) buildEventContext(
 			}
 
 			s.waitForAck.Add(-current)
-			s.state.SetLastAcked(lsn)
+			s.manager.Acked().Set(lsn)
 
 			return nil
 		},

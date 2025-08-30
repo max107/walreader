@@ -6,57 +6,43 @@ import (
 	"github.com/jackc/pglogrepl"
 )
 
+func NewStateManager() *StateManager {
+	return &StateManager{
+		latest:    NewState(),
+		confirmed: NewState(),
+		acked:     NewState(),
+	}
+}
+
+type StateManager struct {
+	latest    *State
+	confirmed *State
+	acked     *State
+}
+
+func (s *StateManager) Latest() *State    { return s.latest }
+func (s *StateManager) Confirmed() *State { return s.confirmed }
+func (s *StateManager) Acked() *State     { return s.acked }
+
 func NewState() *State {
 	return &State{}
 }
 
 type State struct {
-	mu               sync.RWMutex
-	lsn              pglogrepl.LSN
-	lastAckedLSN     pglogrepl.LSN
-	lastConfirmedLSN pglogrepl.LSN
+	mu  sync.RWMutex
+	lsn pglogrepl.LSN
 }
 
-func (s *State) GetConfirmed() pglogrepl.LSN {
+func (s *State) Get() pglogrepl.LSN {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.lastConfirmedLSN
-}
-
-func (s *State) SetConfirmed(l pglogrepl.LSN) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.lastConfirmedLSN = l
-}
-
-func (s *State) GetLastAcked() pglogrepl.LSN {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	return s.lastAckedLSN
-}
-
-func (s *State) SetLastAcked(l pglogrepl.LSN) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.lastAckedLSN = l
+	return s.lsn
 }
 
 func (s *State) Set(l pglogrepl.LSN) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.lsn < l {
-		s.lsn = l
-	}
-}
-
-func (s *State) Load() pglogrepl.LSN {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	return s.lsn
+	s.lsn = l
 }
