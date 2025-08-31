@@ -51,20 +51,6 @@ func extractValues(
 	return values, nil
 }
 
-func SendStandbyStatusUpdate(
-	ctx context.Context,
-	conn *pgconn.PgConn,
-	lsn pglogrepl.LSN,
-) error {
-	return pglogrepl.SendStandbyStatusUpdate(
-		ctx,
-		conn,
-		pglogrepl.StandbyStatusUpdate{
-			WALWritePosition: lsn,
-		},
-	)
-}
-
 func isSlotError(err error) bool {
 	var v *pgconn.PgError
 
@@ -98,6 +84,7 @@ func startReplication(ctx context.Context, conn *pgconn.PgConn, publicationName,
 
 func buildEvent(
 	eventType EventType,
+	lsn pglogrepl.LSN,
 	typeMap *pgtype.Map,
 	relations map[uint32]*pglogrepl.RelationMessageV2,
 	serverTime time.Time,
@@ -111,6 +98,7 @@ func buildEvent(
 	}
 
 	event := &Event{
+		lsn:        lsn,
 		ServerTime: serverTime,
 		Type:       eventType,
 		Schema:     rel.Namespace,

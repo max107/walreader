@@ -1,10 +1,13 @@
 package walreader
 
 import (
+	"context"
 	"time"
 
 	"github.com/jackc/pglogrepl"
 )
+
+type CallbackFn func(ctx context.Context, events []*Event) error
 
 type EventType string
 
@@ -17,11 +20,6 @@ const (
 	Truncate EventType = "truncate"
 )
 
-type EventContext struct {
-	event *Event
-	ack   AckFunc
-}
-
 type Event struct {
 	ServerTime time.Time      `json:"server_time"`
 	Values     map[string]any `json:"values"`
@@ -29,6 +27,8 @@ type Event struct {
 	Type       EventType      `json:"type"`
 	Schema     string         `json:"namespace"`
 	Table      string         `json:"table"`
+
+	lsn pglogrepl.LSN
 }
 
 type Info struct {

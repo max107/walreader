@@ -22,11 +22,6 @@ func buildName(t *testing.T) string {
 	return chunk[len(chunk)-1]
 }
 
-type EventContext struct {
-	event *walreader.Event
-	ack   walreader.AckFunc
-}
-
 func newConn(t *testing.T) *pgx.Conn {
 	t.Helper()
 
@@ -73,7 +68,7 @@ func resetCounters(t *testing.T) {
 	}
 }
 
-func prepare(t *testing.T, sqls []string) *pgx.Conn {
+func prepare(t *testing.T, sqls []string) {
 	t.Helper()
 
 	resetCounters(t)
@@ -93,7 +88,7 @@ func prepare(t *testing.T, sqls []string) *pgx.Conn {
 		require.NoError(t, err)
 	}
 
-	return conn
+	require.NoError(t, conn.Close(t.Context()))
 }
 
 func removeTables(t *testing.T, conn *pgx.Conn) {
@@ -187,10 +182,14 @@ func promValue(t *testing.T, name string) float64 {
 func createLogger(t *testing.T) context.Context {
 	t.Helper()
 
-	return log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).
-		Level(zerolog.WarnLevel).
-		With().
-		Caller().
-		Logger().
-		WithContext(t.Context())
+	if len(os.Getenv("DEBUG_LOG")) == 0 {
+		return log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).
+			Level(zerolog.InfoLevel).
+			With().
+			Caller().
+			Logger().
+			WithContext(t.Context())
+	}
+
+	return zerolog.Nop().WithContext(t.Context())
 }
