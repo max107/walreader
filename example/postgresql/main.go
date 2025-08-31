@@ -15,7 +15,7 @@ import (
 )
 
 type Message struct {
-	Ack   func() error
+	Ack   walreader.AckFunc
 	Query string
 	Args  []any
 }
@@ -86,7 +86,7 @@ func FilteredMapper(messages chan Message) walreader.SingleFn {
 func Produce(ctx context.Context, w *pgxpool.Pool, messages <-chan Message) {
 	l := log.Ctx(ctx)
 
-	var lastAck func() error
+	var lastAck walreader.AckFunc
 	counter := 0
 	bulkSize := 10000
 
@@ -107,10 +107,10 @@ func Produce(ctx context.Context, w *pgxpool.Pool, messages <-chan Message) {
 					continue
 				}
 				l.Info().Int("count", counter).Msg("postgresql write")
-				counter = 0
-				if err = event.Ack(); err != nil {
+				if err := event.Ack(int64(counter)); err != nil {
 					l.Err(err).Msg("ack")
 				}
+				counter = 0
 			}
 
 		case <-time.After(500 * time.Millisecond):
@@ -122,10 +122,10 @@ func Produce(ctx context.Context, w *pgxpool.Pool, messages <-chan Message) {
 					continue
 				}
 				l.Info().Int("count", counter).Msg("postgresql write")
-				counter = 0
-				if err = lastAck(); err != nil {
+				if err := lastAck(int64(counter)); err != nil {
 					l.Err(err).Msg("ack")
 				}
+				counter = 0
 			}
 		}
 	}

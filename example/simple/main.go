@@ -50,7 +50,7 @@ func Handler(ctx context.Context, event *walreader.Event, ack walreader.AckFunc)
 		l.Info().Interface("event", event).Msg("delete")
 	}
 
-	if err := ack(); err != nil {
+	if err := ack(1); err != nil {
 		return err
 	}
 

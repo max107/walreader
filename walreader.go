@@ -27,7 +27,7 @@ type WALReader struct {
 	helperConn      *pgx.Conn
 	waitForAck      atomic.Int64
 	closed          atomic.Bool
-	stop            chan struct{}
+	stopCh          chan struct{}
 	mu              sync.Mutex
 	publicationName string
 	slotName        string
@@ -52,7 +52,7 @@ func New(
 		publicationName: publicationName,
 		slotName:        slotName,
 		readyCh:         make(chan struct{}, 1),
-		stop:            make(chan struct{}, 1),
+		stopCh:          make(chan struct{}, 1),
 	}
 }
 
@@ -71,9 +71,6 @@ func (c *WALReader) startReplication(ctx context.Context, publicationName, slotN
 }
 
 func (c *WALReader) SlotInfo(ctx context.Context) (*Info, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	row := c.helperConn.QueryRow(ctx, fmt.Sprintf(`
 SELECT 
     slot_name,
@@ -141,10 +138,12 @@ func (c *WALReader) callback(ctx context.Context, fn internalFn) error {
 	return nil
 }
 
+// GetLastAcked used only for tests
 func (c *WALReader) GetLastAcked() pglogrepl.LSN {
 	return c.manager.Acked().Get()
 }
 
+// GetConfirmed used only for tests
 func (c *WALReader) GetConfirmed() pglogrepl.LSN {
 	return c.manager.Confirmed().Get()
 }
@@ -164,7 +163,7 @@ func (c *WALReader) batchProcess(
 ) error {
 	l := log.Ctx(ctx)
 
-	var lastAck func() error
+	var lastAck AckFunc
 
 	queue := make([]*Event, 0, bulkSize)
 
@@ -185,8 +184,8 @@ func (c *WALReader) batchProcess(
 			l.Info().Msg("context done")
 			return nil
 
-		case <-c.stop:
-			l.Info().Msg("stop signal received")
+		case <-c.stopCh:
+			l.Info().Msg("stopCh signal received")
 			return nil
 
 		case item, ok := <-messages:
@@ -264,15 +263,26 @@ func (c *WALReader) metrics(ctx context.Context) {
 	l := log.Ctx(ctx)
 
 	ticker := time.NewTicker(time.Second)
-
 	defer ticker.Stop()
 
 	l.Info().Msg("start metrics")
 
 	for {
 		select {
-		case <-c.stop:
-			l.Info().Msg("stop signal, stop metrics")
+		case <-ctx.Done():
+			l.Info().Msg("context done")
+
+			if err := c.helperConn.Close(ctx); err != nil {
+				l.Err(err).Msg("close helper connection")
+			}
+			return
+
+		case <-c.stopCh:
+			l.Info().Msg("stopCh signal, stopCh metrics")
+
+			if err := c.helperConn.Close(ctx); err != nil {
+				l.Err(err).Msg("close helper connection")
+			}
 			return
 
 		case <-ticker.C:
@@ -303,20 +313,14 @@ func (c *WALReader) Close(ctx context.Context) error {
 	l := log.Ctx(ctx)
 
 	c.closed.Store(true)
-	c.stop <- struct{}{}
+	c.stopCh <- struct{}{}
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if err := c.helperConn.Close(ctx); err != nil {
-		l.Err(err).Msg("close helper connection")
-		return err
-	}
-
 	if err := c.conn.Close(ctx); err != nil {
 		l.Err(err).Msg("close connection")
 		return err
 	}
+	c.mu.Unlock()
 
 	return nil
 }
@@ -379,8 +383,8 @@ func (c *WALReader) sink(ctx context.Context, ch chan<- *EventContext) error {
 			l.Info().Msg("context done")
 			return nil
 
-		case <-c.stop:
-			l.Info().Msg("stop signal")
+		case <-c.stopCh:
+			l.Info().Msg("stopCh signal")
 			return nil
 
 		default:
@@ -435,20 +439,20 @@ func (c *WALReader) readNext(ctx context.Context) (*pgproto3.CopyData, bool, err
 			if waitAck > 0 {
 				l.Info().
 					Int64("wait_ack", waitAck).
-					Msg("timeout reached but some events already in queue, skip")
+					Msg("timeout reached, non empty queue, skip")
 				return nil, true, nil
 			}
 
-			l.Info().Int64("wait_ack", waitAck).Msg("timeout reached, send stand by status update")
+			l.Info().Int64("wait_ack", waitAck).Msg("timeout reached, commit")
 			currentLSN := c.manager.Latest().Get()
-			if err := SendStandbyStatusUpdate(ctx, c.conn, currentLSN); err != nil {
-				l.Err(err).Msg("send stand by status update")
+			if err := c.commit(ctx, currentLSN); err != nil {
+				l.Err(err).Msg("commit")
 				return nil, false, err
 			}
 
 			c.manager.Confirmed().Set(currentLSN)
 
-			l.Info().Int64("wait_ack", waitAck).Msg("timeout received, status update, skip to next iteration")
+			l.Debug().Int64("wait_ack", waitAck).Msg("timeout received, skip to next iteration")
 			return nil, true, nil
 		}
 
@@ -473,7 +477,22 @@ func (c *WALReader) readNext(ctx context.Context) (*pgproto3.CopyData, bool, err
 	return msg, false, nil
 }
 
-func (c *WALReader) parseMessage(ctx context.Context, xld pglogrepl.XLogData, inStream bool, ch chan<- *EventContext) error {
+func (c *WALReader) commit(ctx context.Context, lsn pglogrepl.LSN) error {
+	return pglogrepl.SendStandbyStatusUpdate(
+		ctx,
+		c.conn,
+		pglogrepl.StandbyStatusUpdate{
+			WALWritePosition: lsn,
+		},
+	)
+}
+
+func (c *WALReader) parseMessage(
+	ctx context.Context,
+	xld pglogrepl.XLogData,
+	inStream bool,
+	ch chan<- *EventContext,
+) error {
 	l := log.Ctx(ctx)
 
 	l.Debug().
@@ -509,9 +528,11 @@ func (c *WALReader) parseMessage(ctx context.Context, xld pglogrepl.XLogData, in
 			totalTruncate.Add(1)
 		}
 
+		c.waitForAck.Add(1)
+
 		ch <- &EventContext{
 			event: event,
-			ack:   c.createAck(ctx, c.waitForAck.Add(1), xld.WALStart),
+			ack:   c.createAck(ctx, xld.WALStart),
 		}
 	}
 
@@ -520,15 +541,17 @@ func (c *WALReader) parseMessage(ctx context.Context, xld pglogrepl.XLogData, in
 
 func (c *WALReader) createAck(
 	ctx context.Context,
-	current int64,
 	lsn pglogrepl.LSN,
 ) AckFunc {
 	l := log.Ctx(ctx)
 
 	start := time.Now()
 
-	return func() error {
-		l.Info().Int64("queue", current).Uint64("lsn", uint64(lsn)).Msg("send ack")
+	return func(count int64) error {
+		l.Debug().
+			Int64("queue", count).
+			Uint64("lsn", uint64(lsn)).
+			Msg("send ack")
 
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -546,12 +569,15 @@ func (c *WALReader) createAck(
 			Str("lsn", lsn.String()).
 			Msg("send stand by status update")
 
-		if err := SendStandbyStatusUpdate(ctx, c.conn, lsn); err != nil {
+		if err := c.commit(ctx, lsn); err != nil {
 			l.Err(err).Msg("ack error")
 			return err
 		}
 
-		c.waitForAck.Add(-current)
+		newQueue := c.waitForAck.Add(-count)
+		if newQueue < 0 {
+			panic(newQueue)
+		}
 		c.manager.Acked().Set(lsn)
 
 		return nil

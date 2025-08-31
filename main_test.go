@@ -187,7 +187,7 @@ func promValue(t *testing.T, name string) float64 {
 func createLogger(t *testing.T) context.Context {
 	t.Helper()
 
-	if len(os.Getenv("DEBUG_LOG")) > 0 {
+	if len(os.Getenv("DEBUG_LOG")) == 0 {
 		return log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).
 			Level(zerolog.InfoLevel).
 			With().

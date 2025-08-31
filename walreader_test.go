@@ -108,7 +108,7 @@ func TestManualAck(t *testing.T) {
 		<-done
 		require.Zero(t, connector.GetLastAcked())
 		require.Equal(t, int64(5), connector.WaitAck())
-		require.NoError(t, lastAck())
+		require.NoError(t, lastAck(int64(count)))
 		require.Zero(t, connector.WaitAck())
 		require.NotZero(t, connector.GetLastAcked())
 
@@ -148,7 +148,7 @@ func TestManualAck(t *testing.T) {
 
 		<-done
 
-		require.NoError(t, latestAck())
+		require.NoError(t, latestAck(5))
 		require.Zero(t, connector.WaitAck())
 		require.NotZero(t, connector.GetLastAcked())
 
@@ -189,7 +189,7 @@ func TestManualAck(t *testing.T) {
 		require.Equal(t, int64(5), connector.WaitAck())
 		require.Zero(t, connector.GetConfirmed())
 
-		require.NoError(t, lastAck())
+		require.NoError(t, lastAck(5))
 		require.Zero(t, connector.WaitAck())
 		require.NotZero(t, connector.GetLastAcked())
 
@@ -220,7 +220,7 @@ func TestBasic(t *testing.T) {
 		go func() {
 			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event, ack walreader.AckFunc) error {
 				messageCh <- event
-				return ack()
+				return ack(1)
 			}); err != nil {
 				t.Fail()
 			}
@@ -251,7 +251,7 @@ func TestBasic(t *testing.T) {
 		go func() {
 			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event, ack walreader.AckFunc) error {
 				messageCh <- event
-				return ack()
+				return ack(1)
 			}); err != nil {
 				t.Fail()
 			}
@@ -290,7 +290,7 @@ func TestBasic(t *testing.T) {
 		go func() {
 			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event, ack walreader.AckFunc) error {
 				messageCh <- event
-				return ack()
+				return ack(1)
 			}); err != nil {
 				t.Fail()
 			}
@@ -327,7 +327,7 @@ func TestBasic(t *testing.T) {
 		go func() {
 			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event, ack walreader.AckFunc) error {
 				messageCh <- event
-				return ack()
+				return ack(1)
 			}); err != nil {
 				t.Fail()
 			}
@@ -360,7 +360,7 @@ func TestErrors(t *testing.T) {
 		})
 
 		handlerFunc := func(_ context.Context, _ *walreader.Event, ack walreader.AckFunc) error {
-			return ack()
+			return ack(1)
 		}
 
 		go connector.Start(log.Ctx(ctx).With().Int("instance", 1).Logger().WithContext(ctx), handlerFunc) //nolint:errcheck
@@ -382,7 +382,7 @@ func TestErrors(t *testing.T) {
 		})
 
 		handlerFunc := func(_ context.Context, _ *walreader.Event, ack walreader.AckFunc) error {
-			return ack()
+			return ack(1)
 		}
 
 		require.ErrorIs(t, connector.Start(ctx, handlerFunc), walreader.ErrSlotIsNotExists)
@@ -444,12 +444,11 @@ func TestCopyProtocol(t *testing.T) {
 
 			if m.event.Type == walreader.Insert {
 				if m.event.Values["id"].(int32) == 4 {
+					require.NoError(t, m.ack(4))
 					require.NoError(t, connector.Close(ctx))
 					break
 				}
 			}
-
-			require.NoError(t, m.ack())
 		}
 
 		_, _ = helperConn.Exec(t.Context(), `select pg_terminate_backend(active_pid) from pg_replication_slots;`)
@@ -493,7 +492,7 @@ func TestIdentity(t *testing.T) {
 		go func() {
 			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event, ack walreader.AckFunc) error {
 				messageCh <- event
-				return ack()
+				return ack(1)
 			}); err != nil {
 				t.Fail()
 			}
@@ -525,7 +524,7 @@ func TestIdentity(t *testing.T) {
 		go func() {
 			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event, ack walreader.AckFunc) error {
 				messageCh <- event
-				return ack()
+				return ack(1)
 			}); err != nil {
 				t.Fail()
 			}
@@ -558,7 +557,7 @@ func TestTransactionalProcess(t *testing.T) {
 		messageCh := make(chan *walreader.Event, 500)
 		handlerFunc := func(_ context.Context, event *walreader.Event, ack walreader.AckFunc) error {
 			messageCh <- event
-			return ack()
+			return ack(1)
 		}
 
 		go connector.Start(ctx, handlerFunc) //nolint:errcheck
