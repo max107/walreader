@@ -37,7 +37,7 @@ func TestBatch(t *testing.T) {
 				ctx,
 				4,
 				200*time.Millisecond,
-				func(_ context.Context, events []*walreader.Event, _ walreader.AckFunc) error {
+				func(_ context.Context, events []*walreader.Event) error {
 					callCount += 1
 					ids := make([]int32, 0, len(events))
 					for _, event := range events {
@@ -64,144 +64,6 @@ func TestBatch(t *testing.T) {
 	})
 }
 
-func TestManualAck(t *testing.T) {
-	ctx := createLogger(t)
-
-	t.Run("single_manual_ack", func(t *testing.T) {
-		connector, name := newReader(t)
-
-		prepare(t, []string{
-			`create table books (id serial primary key, name text not null);`,
-			fmt.Sprintf(`drop publication if exists %s;`, name),
-			fmt.Sprintf(`create publication %s for table books;`, name),
-			fmt.Sprintf(`select pg_create_logical_replication_slot('%s', 'pgoutput');`, name),
-			`insert into books (id, name) values (1, 'book-1'), (2, 'book-2'), (3, 'book-3'), (4, 'book-4'), (5, 'book-5');`,
-		})
-		messageCh := make(chan *walreader.Event)
-
-		require.Zero(t, connector.GetLastAcked())
-
-		var lastAck walreader.AckFunc
-		done := make(chan struct{}, 1)
-		count := 0
-
-		go func() {
-			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event, ack walreader.AckFunc) error {
-				messageCh <- event
-				lastAck = ack
-				count += 1
-				if count == 5 {
-					done <- struct{}{}
-				}
-				return nil
-			}); err != nil {
-				t.Fail()
-			}
-		}()
-
-		for i := range 5 {
-			m := <-messageCh
-			require.Equal(t, int32(i+1), m.Values["id"]) //nolint:gosec
-			require.Equal(t, fmt.Sprintf("book-%d", i+1), m.Values["name"])
-		}
-
-		<-done
-		require.Zero(t, connector.GetLastAcked())
-		require.Equal(t, int64(5), connector.WaitAck())
-		require.NoError(t, lastAck(int64(count)))
-		require.Zero(t, connector.WaitAck())
-		require.NotZero(t, connector.GetLastAcked())
-
-		require.InEpsilon(t, 5.0, promValue(t, "insert"), 0)
-		require.NoError(t, connector.Close(ctx))
-	})
-
-	t.Run("batch_manual_ack", func(t *testing.T) {
-		connector, name := newReader(t)
-
-		prepare(t, []string{
-			`create table books (id serial primary key, name text not null);`,
-			fmt.Sprintf(`drop publication if exists %s;`, name),
-			fmt.Sprintf(`create publication %s for table books;`, name),
-			fmt.Sprintf(`select pg_create_logical_replication_slot('%s', 'pgoutput');`, name),
-			`insert into books (id, name) values (1, 'book-1'), (2, 'book-2'), (3, 'book-3'), (4, 'book-4'), (5, 'book-5');`,
-		})
-
-		require.Zero(t, connector.GetLastAcked())
-		done := make(chan struct{}, 1)
-		var latestAck walreader.AckFunc
-
-		go func() {
-			if err := connector.Batch(
-				ctx,
-				10,
-				300*time.Millisecond,
-				func(_ context.Context, events []*walreader.Event, ack walreader.AckFunc) error {
-					latestAck = ack
-					done <- struct{}{}
-					return nil
-				},
-			); err != nil {
-				t.Fail()
-			}
-		}()
-
-		<-done
-
-		require.NoError(t, latestAck(5))
-		require.Zero(t, connector.WaitAck())
-		require.NotZero(t, connector.GetLastAcked())
-
-		require.InEpsilon(t, 5.0, promValue(t, "insert"), 0)
-		require.NoError(t, connector.Close(ctx))
-	})
-
-	t.Run("dont_change_lsn_if_queue_is_not_empty", func(t *testing.T) {
-		connector, name := newReader(t)
-
-		prepare(t, []string{
-			`create table books (id serial primary key, name text not null);`,
-			fmt.Sprintf(`drop publication if exists %s;`, name),
-			fmt.Sprintf(`create publication %s for table books;`, name),
-			fmt.Sprintf(`select pg_create_logical_replication_slot('%s', 'pgoutput');`, name),
-			`insert into books (id, name) values (1, 'book-1'), (2, 'book-2'), (3, 'book-3'), (4, 'book-4'), (5, 'book-5');`,
-		})
-
-		require.Zero(t, connector.GetConfirmed())
-		done := make(chan struct{}, 1)
-		count := 0
-		var lastAck walreader.AckFunc
-
-		go func() {
-			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event, ack walreader.AckFunc) error {
-				lastAck = ack
-				count += 1
-				if count == 5 {
-					done <- struct{}{}
-				}
-				return nil
-			}); err != nil {
-				t.Fail()
-			}
-		}()
-
-		<-done
-		require.Equal(t, int64(5), connector.WaitAck())
-		require.Zero(t, connector.GetConfirmed())
-
-		require.NoError(t, lastAck(5))
-		require.Zero(t, connector.WaitAck())
-		require.NotZero(t, connector.GetLastAcked())
-
-		time.Sleep(2 * time.Second)
-
-		require.NotZero(t, connector.GetConfirmed())
-
-		require.InEpsilon(t, 5.0, promValue(t, "insert"), 0)
-		require.NoError(t, connector.Close(ctx))
-	})
-}
-
 func TestBasic(t *testing.T) {
 	ctx := createLogger(t)
 
@@ -218,9 +80,9 @@ func TestBasic(t *testing.T) {
 		messageCh := make(chan *walreader.Event)
 
 		go func() {
-			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event, ack walreader.AckFunc) error {
+			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event) error {
 				messageCh <- event
-				return ack(1)
+				return nil
 			}); err != nil {
 				t.Fail()
 			}
@@ -249,9 +111,9 @@ func TestBasic(t *testing.T) {
 		messageCh := make(chan *walreader.Event)
 
 		go func() {
-			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event, ack walreader.AckFunc) error {
+			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event) error {
 				messageCh <- event
-				return ack(1)
+				return nil
 			}); err != nil {
 				t.Fail()
 			}
@@ -288,9 +150,9 @@ func TestBasic(t *testing.T) {
 		messageCh := make(chan *walreader.Event)
 
 		go func() {
-			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event, ack walreader.AckFunc) error {
+			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event) error {
 				messageCh <- event
-				return ack(1)
+				return nil
 			}); err != nil {
 				t.Fail()
 			}
@@ -325,9 +187,9 @@ func TestBasic(t *testing.T) {
 		messageCh := make(chan *walreader.Event)
 
 		go func() {
-			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event, ack walreader.AckFunc) error {
+			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event) error {
 				messageCh <- event
-				return ack(1)
+				return nil
 			}); err != nil {
 				t.Fail()
 			}
@@ -359,8 +221,8 @@ func TestErrors(t *testing.T) {
 			fmt.Sprintf(`select pg_create_logical_replication_slot('%s', 'pgoutput');`, name),
 		})
 
-		handlerFunc := func(_ context.Context, _ *walreader.Event, ack walreader.AckFunc) error {
-			return ack(1)
+		handlerFunc := func(_ context.Context, _ *walreader.Event) error {
+			return nil
 		}
 
 		go connector.Start(log.Ctx(ctx).With().Int("instance", 1).Logger().WithContext(ctx), handlerFunc) //nolint:errcheck
@@ -381,8 +243,8 @@ func TestErrors(t *testing.T) {
 			fmt.Sprintf(`create publication %s for table books;`, name),
 		})
 
-		handlerFunc := func(_ context.Context, _ *walreader.Event, ack walreader.AckFunc) error {
-			return ack(1)
+		handlerFunc := func(_ context.Context, _ *walreader.Event) error {
+			return nil
 		}
 
 		require.ErrorIs(t, connector.Start(ctx, handlerFunc), walreader.ErrSlotIsNotExists)
@@ -406,11 +268,10 @@ func TestCopyProtocol(t *testing.T) {
 
 		messageCh := make(chan EventContext)
 		totalCounter := atomic.Int64{}
-		handlerFunc := func(_ context.Context, event *walreader.Event, ack walreader.AckFunc) error {
+		handlerFunc := func(_ context.Context, event *walreader.Event) error {
 			totalCounter.Add(1)
 			messageCh <- EventContext{
 				event: event,
-				ack:   ack,
 			}
 			return nil
 		}
@@ -444,7 +305,6 @@ func TestCopyProtocol(t *testing.T) {
 
 			if m.event.Type == walreader.Insert {
 				if m.event.Values["id"].(int32) == 4 {
-					require.NoError(t, m.ack(4))
 					require.NoError(t, connector.Close(ctx))
 					break
 				}
@@ -490,9 +350,9 @@ func TestIdentity(t *testing.T) {
 		messageCh := make(chan *walreader.Event)
 
 		go func() {
-			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event, ack walreader.AckFunc) error {
+			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event) error {
 				messageCh <- event
-				return ack(1)
+				return nil
 			}); err != nil {
 				t.Fail()
 			}
@@ -522,9 +382,9 @@ func TestIdentity(t *testing.T) {
 		messageCh := make(chan *walreader.Event)
 
 		go func() {
-			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event, ack walreader.AckFunc) error {
+			if err := connector.Start(ctx, func(_ context.Context, event *walreader.Event) error {
 				messageCh <- event
-				return ack(1)
+				return nil
 			}); err != nil {
 				t.Fail()
 			}
@@ -555,9 +415,9 @@ func TestTransactionalProcess(t *testing.T) {
 		})
 
 		messageCh := make(chan *walreader.Event, 500)
-		handlerFunc := func(_ context.Context, event *walreader.Event, ack walreader.AckFunc) error {
+		handlerFunc := func(_ context.Context, event *walreader.Event) error {
 			messageCh <- event
-			return ack(1)
+			return nil
 		}
 
 		go connector.Start(ctx, handlerFunc) //nolint:errcheck

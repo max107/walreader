@@ -9,8 +9,8 @@ import (
 
 type internalFn func(ctx context.Context, event *EventContext) error
 
-type SingleFn func(ctx context.Context, event *Event, ack AckFunc) error
-type BatchFn func(ctx context.Context, events []*Event, ack AckFunc) error
+type SingleFn func(ctx context.Context, event *Event) error
+type BatchFn func(ctx context.Context, events []*Event) error
 
 type AckFunc func(count int64) error
 

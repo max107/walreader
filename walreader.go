@@ -151,7 +151,11 @@ func (c *WALReader) GetConfirmed() pglogrepl.LSN {
 
 func (c *WALReader) Start(ctx context.Context, fn SingleFn) error {
 	return c.callback(ctx, func(ctx context.Context, event *EventContext) error {
-		return fn(ctx, event.event, event.ack)
+		if err := fn(ctx, event.event); err != nil {
+			return err
+		}
+
+		return event.ack(1)
 	})
 }
 
@@ -169,8 +173,13 @@ func (c *WALReader) batchProcess(
 	queue := make([]*Event, 0, bulkSize)
 
 	flush := func() error {
-		if err := fn(ctx, queue, lastAck); err != nil {
+		if err := fn(ctx, queue); err != nil {
 			l.Err(err).Msg("batch callback")
+			return err
+		}
+
+		if err := lastAck(int64(len(queue))); err != nil {
+			l.Err(err).Msg("ack error")
 			return err
 		}
 

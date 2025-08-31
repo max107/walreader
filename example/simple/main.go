@@ -38,7 +38,7 @@ func main() {
 	}
 }
 
-func Handler(ctx context.Context, event *walreader.Event, ack walreader.AckFunc) error {
+func Handler(ctx context.Context, event *walreader.Event) error {
 	l := log.Ctx(ctx)
 
 	switch event.Type { //nolint:exhaustive
@@ -48,10 +48,6 @@ func Handler(ctx context.Context, event *walreader.Event, ack walreader.AckFunc)
 		l.Info().Interface("event", event).Msg("update")
 	case walreader.Delete:
 		l.Info().Interface("event", event).Msg("delete")
-	}
-
-	if err := ack(1); err != nil {
-		return err
 	}
 
 	return nil

@@ -24,7 +24,6 @@ func buildName(t *testing.T) string {
 
 type EventContext struct {
 	event *walreader.Event
-	ack   walreader.AckFunc
 }
 
 func newConn(t *testing.T) *pgx.Conn {
