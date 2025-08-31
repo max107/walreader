@@ -20,6 +20,7 @@ var (
 	ErrUnknownRelation = errors.New("unknown relation")
 	ErrSlotInUse       = errors.New("replication slot in use")
 	ErrSlotIsNotExists = errors.New("slot is not exists")
+	ErrNegativeAckWait = errors.New("negative wait count")
 )
 
 type WALReader struct {
@@ -574,9 +575,9 @@ func (c *WALReader) createAck(
 			return err
 		}
 
-		newQueue := c.waitForAck.Add(-count)
-		if newQueue < 0 {
-			panic(newQueue)
+		if c.waitForAck.Add(-count) < 0 {
+			l.Err(ErrNegativeAckWait).Msg("ack error")
+			return ErrNegativeAckWait
 		}
 		c.manager.Acked().Set(lsn)
 
