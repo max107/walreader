@@ -7,12 +7,7 @@ import (
 	"github.com/jackc/pglogrepl"
 )
 
-type internalFn func(ctx context.Context, event *EventContext) error
-
-type SingleFn func(ctx context.Context, event *Event) error
-type BatchFn func(ctx context.Context, events []*Event) error
-
-type AckFunc func(count int64) error
+type CallbackFn func(ctx context.Context, events []*Event) error
 
 type EventType string
 
@@ -25,11 +20,6 @@ const (
 	Truncate EventType = "truncate"
 )
 
-type EventContext struct {
-	event *Event
-	ack   AckFunc
-}
-
 type Event struct {
 	ServerTime time.Time      `json:"server_time"`
 	Values     map[string]any `json:"values"`
@@ -37,6 +27,8 @@ type Event struct {
 	Type       EventType      `json:"type"`
 	Schema     string         `json:"namespace"`
 	Table      string         `json:"table"`
+
+	lsn pglogrepl.LSN
 }
 
 type Info struct {

@@ -22,10 +22,6 @@ func buildName(t *testing.T) string {
 	return chunk[len(chunk)-1]
 }
 
-type EventContext struct {
-	event *walreader.Event
-}
-
 func newConn(t *testing.T) *pgx.Conn {
 	t.Helper()
 
@@ -72,7 +68,7 @@ func resetCounters(t *testing.T) {
 	}
 }
 
-func prepare(t *testing.T, sqls []string) *pgx.Conn {
+func prepare(t *testing.T, sqls []string) {
 	t.Helper()
 
 	resetCounters(t)
@@ -92,7 +88,7 @@ func prepare(t *testing.T, sqls []string) *pgx.Conn {
 		require.NoError(t, err)
 	}
 
-	return conn
+	require.NoError(t, conn.Close(t.Context()))
 }
 
 func removeTables(t *testing.T, conn *pgx.Conn) {

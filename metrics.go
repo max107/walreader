@@ -22,7 +22,7 @@ var (
 	totalUpdate           = createGauge("update", "total number of update operation message")
 	totalDelete           = createGauge("delete", "total number of delete operation message")
 	totalTruncate         = createGauge("truncate", "total number of truncate operation message")
-	cdcLatency            = createGauge("receive_latency", "latest consumed message latency ms")
+	latency               = createGauge("receive_latency", "latest consumed message latency ms")
 	processLatency        = createGauge("process_latency", "latest cdc process latency")
 	slotActivity          = createGauge("slot_is_active", "whether the replication slot is active or not")
 	slotConfirmedFlushLSN = createGauge("slot_confirmed_flush_lsn", "last lsn confirmed flushed to the replication slot")
@@ -36,7 +36,7 @@ func GetCollectors() []prometheus.Collector {
 		totalInsert,
 		totalUpdate,
 		totalDelete,
-		cdcLatency,
+		latency,
 		processLatency,
 		slotActivity,
 		slotConfirmedFlushLSN,

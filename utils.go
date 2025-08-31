@@ -84,6 +84,7 @@ func startReplication(ctx context.Context, conn *pgconn.PgConn, publicationName,
 
 func buildEvent(
 	eventType EventType,
+	lsn pglogrepl.LSN,
 	typeMap *pgtype.Map,
 	relations map[uint32]*pglogrepl.RelationMessageV2,
 	serverTime time.Time,
@@ -97,6 +98,7 @@ func buildEvent(
 	}
 
 	event := &Event{
+		lsn:        lsn,
 		ServerTime: serverTime,
 		Type:       eventType,
 		Schema:     rel.Namespace,

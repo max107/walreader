@@ -39,7 +39,7 @@ func main() {
 
 	connector := walreader.New(conn, slotConn, "cdc_publication", "cdc_slot")
 
-	if err := connector.Batch(ctx, 100, time.Second, FilteredMapper(pool)); err != nil {
+	if err := connector.Start(ctx, 100, time.Second, FilteredMapper(pool)); err != nil {
 		l.Fatal().Err(err).Send()
 	}
 }
@@ -49,7 +49,7 @@ var (
 	deleteQuery = "DELETE FROM users WHERE id = $1;"
 )
 
-func FilteredMapper(w *pgxpool.Pool) walreader.BatchFn {
+func FilteredMapper(w *pgxpool.Pool) walreader.CallbackFn {
 	return func(ctx context.Context, events []*walreader.Event) error {
 		l := log.Ctx(ctx).
 			With().
@@ -58,7 +58,7 @@ func FilteredMapper(w *pgxpool.Pool) walreader.BatchFn {
 
 		queue := make([]*pgx.QueuedQuery, len(events))
 		for i, event := range events {
-			switch event.Type {
+			switch event.Type { //nolint:exhaustive
 			case walreader.Delete:
 				queue[i] = &pgx.QueuedQuery{
 					SQL:       deleteQuery,

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog"
@@ -33,21 +34,23 @@ func main() {
 	connector := walreader.New(conn, slotConn, name, name)
 
 	defer connector.Close(ctx)
-	if err := connector.Start(ctx, Handler); err != nil {
+	if err := connector.Start(ctx, 100, time.Second, Handler); err != nil {
 		l.Fatal().Err(err).Send()
 	}
 }
 
-func Handler(ctx context.Context, event *walreader.Event) error {
+func Handler(ctx context.Context, events []*walreader.Event) error {
 	l := log.Ctx(ctx)
 
-	switch event.Type { //nolint:exhaustive
-	case walreader.Insert:
-		l.Info().Interface("event", event).Msg("insert")
-	case walreader.Update:
-		l.Info().Interface("event", event).Msg("update")
-	case walreader.Delete:
-		l.Info().Interface("event", event).Msg("delete")
+	for _, event := range events {
+		switch event.Type { //nolint:exhaustive
+		case walreader.Insert:
+			l.Info().Interface("event", event).Msg("insert")
+		case walreader.Update:
+			l.Info().Interface("event", event).Msg("update")
+		case walreader.Delete:
+			l.Info().Interface("event", event).Msg("delete")
+		}
 	}
 
 	return nil
