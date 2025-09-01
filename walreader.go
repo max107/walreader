@@ -121,7 +121,9 @@ func (c *WALReader) flush(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	l.Debug().Int("ackWait", len(queue)).Msg("flushing")
+	l.Info().Int("events_count", len(queue)).Msg("new events")
+
+	l.Debug().Int("ack_wait", len(queue)).Msg("flushing")
 
 	if err := fn(ctx, queue); err != nil {
 		l.Err(err).Msg("callback error")
@@ -134,7 +136,7 @@ func (c *WALReader) flush(
 	}
 
 	currentQueue := c.ackWait.Add(-uint64(len(queue)))
-	l.Debug().Uint64("ackWait", currentQueue).Msg("current ackWait")
+	l.Debug().Uint64("ack_wait", currentQueue).Msg("ack wait queue")
 
 	return nil
 }
