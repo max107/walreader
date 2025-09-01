@@ -274,7 +274,7 @@ func (c *WALReader) metrics(ctx context.Context) {
 			slotRetainedWALSize.Set(float64(slotInfo.RetainedWALSize))
 			slotLag.Set(float64(slotInfo.Lag))
 
-			l.Debug().Msg("update lsn from ticker")
+			l.Debug().Str("lsn", slotInfo.CurrentLSN.String()).Msg("update lsn from ticker")
 
 			c.manager.Latest().Set(slotInfo.CurrentLSN)
 		}
