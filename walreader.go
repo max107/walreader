@@ -72,7 +72,7 @@ func (c *WALReader) startReplication(ctx context.Context, publicationName, slotN
 	return nil
 }
 
-func (c *WALReader) SlotInfo(ctx context.Context) (*Info, error) {
+func (c *WALReader) slotInfo(ctx context.Context) (*Info, error) {
 	row := c.helperConn.QueryRow(ctx, fmt.Sprintf(`
 SELECT 
     slot_name,
@@ -154,7 +154,7 @@ func (c *WALReader) batchProcess(
 	for {
 		select {
 		case <-c.stopCh:
-			l.Info().Msg("stopCh signal received")
+			l.Info().Msg("stop signal received, shutdown callback")
 			return nil
 
 		case event, ok := <-c.eventCh:
@@ -189,6 +189,7 @@ func (c *WALReader) batchProcess(
 	}
 }
 
+// Start replication
 func (c *WALReader) Start(
 	ctx context.Context,
 	size int,
@@ -197,7 +198,7 @@ func (c *WALReader) Start(
 ) error {
 	l := log.Ctx(ctx)
 
-	slotInfo, err := c.SlotInfo(ctx)
+	slotInfo, err := c.slotInfo(ctx)
 	if err != nil {
 		l.Err(err).Msg("slot info error")
 		return err
@@ -247,7 +248,7 @@ func (c *WALReader) metrics(ctx context.Context) {
 	for {
 		select {
 		case <-c.stopCh:
-			l.Info().Msg("stopCh signal, stopCh metrics")
+			l.Info().Msg("stop signal received, shutdown metrics")
 
 			if err := c.helperConn.Close(ctx); err != nil {
 				l.Err(err).Msg("close helper connection")
@@ -255,7 +256,7 @@ func (c *WALReader) metrics(ctx context.Context) {
 			return
 
 		case <-ticker.C:
-			slotInfo, err := c.SlotInfo(ctx)
+			slotInfo, err := c.slotInfo(ctx)
 			if err != nil {
 				l.Err(err).Msg("slot metrics")
 				continue
@@ -278,6 +279,7 @@ func (c *WALReader) metrics(ctx context.Context) {
 	}
 }
 
+// Close all connections and stop main loop
 func (c *WALReader) Close(ctx context.Context) error {
 	close(c.stopCh)
 
@@ -293,24 +295,26 @@ func (c *WALReader) Close(ctx context.Context) error {
 	return nil
 }
 
+// AckWait return count of pending acknowledgement. Used for tests only.
 func (c *WALReader) AckWait() uint64 {
 	return c.ackWait.Load()
 }
 
+// Ready wait for walreader start replication
 func (c *WALReader) Ready() chan struct{} {
 	return c.readyCh
 }
 
 func (c *WALReader) sink(ctx context.Context) error { //nolint:gocognit
 	l := log.Ctx(ctx)
-	l.Info().Msg("message sink started")
+	l.Info().Msg("start replication loop")
 
 	defer close(c.eventCh)
 
 	for {
 		select {
 		case <-c.stopCh:
-			l.Info().Msg("stopCh signal")
+			l.Info().Msg("stop signal received, shutdown replication loop")
 			return nil
 
 		default:
@@ -375,7 +379,7 @@ func (c *WALReader) readNext(ctx context.Context) (*pgproto3.CopyData, bool, err
 				// if we receive new xld then we should wait for ack lsn from last processed message
 				ackWaitCount := c.ackWait.Load()
 				if ackWaitCount > 0 {
-					l.Info().Uint64("ack_wait", ackWaitCount).Msg("ack wait queue is not empty, skip commit lsn in standby")
+					l.Debug().Uint64("ack_wait", ackWaitCount).Msg("ack wait queue is not empty, skip commit lsn in standby")
 					return nil, true, nil
 				}
 
