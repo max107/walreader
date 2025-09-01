@@ -210,6 +210,9 @@ func (c *WALReader) Start(
 		return ErrSlotInUse
 	}
 
+	c.manager.Latest().Set(slotInfo.CurrentLSN)
+	c.manager.Confirmed().Set(slotInfo.ConfirmedFlushLSN)
+
 	if err := c.startReplication(ctx, c.publicationName, c.slotName); err != nil {
 		l.Err(err).Msg("start replication")
 		return err
@@ -273,10 +276,6 @@ func (c *WALReader) metrics(ctx context.Context) {
 			slotConfirmedFlushLSN.Set(float64(slotInfo.ConfirmedFlushLSN))
 			slotRetainedWALSize.Set(float64(slotInfo.RetainedWALSize))
 			slotLag.Set(float64(slotInfo.Lag))
-
-			l.Debug().Str("lsn", slotInfo.CurrentLSN.String()).Msg("update lsn from ticker")
-
-			c.manager.Latest().Set(slotInfo.CurrentLSN)
 		}
 	}
 }
@@ -333,15 +332,27 @@ func (c *WALReader) sink(ctx context.Context) error { //nolint:gocognit
 
 			switch msg.Data[0] {
 			case pglogrepl.PrimaryKeepaliveMessageByteID:
-				parsed, err := pglogrepl.ParsePrimaryKeepaliveMessage(msg.Data[1:])
+				pkm, err := pglogrepl.ParsePrimaryKeepaliveMessage(msg.Data[1:])
 				if err != nil {
 					l.Err(err).Msg("parse primary keepalive message")
 					return err
 				}
 
-				if parsed.ReplyRequested {
-					if err := c.commit(ctx, c.manager.Acked().Get()); err != nil {
-						l.Err(err).Msg("keep alive commit error")
+				c.manager.Latest().Set(pkm.ServerWALEnd)
+
+				if pkm.ReplyRequested {
+					l.Info().Msg("keep alive reply requested")
+
+					waitLen := c.ackWait.Load()
+					if waitLen > 0 {
+						l.Info().
+							Uint64("ack_wait", waitLen).
+							Msg("ack wait queue is not empty, skip commit lsn in standby")
+						continue
+					}
+
+					if err := c.commit(ctx, c.manager.Latest().Get()); err != nil {
+						l.Err(err).Msg("commit")
 						return err
 					}
 				}
@@ -356,18 +367,23 @@ func (c *WALReader) sink(ctx context.Context) error { //nolint:gocognit
 					l.Err(err).Msg("decode wal data error")
 					return err
 				}
+			default:
+				l.Debug().Msg("unknown message type, skip")
 			}
 		}
 	}
 }
+
+var (
+	deadline = 500 * time.Millisecond
+)
 
 func (c *WALReader) readNext(ctx context.Context) (*pgproto3.CopyData, bool, error) {
 	l := log.Ctx(ctx)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	receiveDeadline := time.Now().Add(time.Second)
-	msgCtx, cancel := context.WithDeadline(ctx, receiveDeadline)
+	msgCtx, cancel := context.WithDeadline(ctx, time.Now().Add(deadline))
 	rawMsg, err := c.conn.ReceiveMessage(msgCtx)
 	cancel()
 	if err != nil {
@@ -376,23 +392,24 @@ func (c *WALReader) readNext(ctx context.Context) (*pgproto3.CopyData, bool, err
 			l.Info().Msg("connection closed")
 		default:
 			if pgconn.Timeout(err) {
+				l.Info().Msg("no new messages")
+
 				// some sync flag is required for synchronisation of current lsn processing
 				// if no new xld received, we should ack latest lsn from PG_CURRENT_WAL_LSN()
 				// if we receive new xld then we should wait for ack lsn from last processed message
-				ackWaitCount := c.ackWait.Load()
-				if ackWaitCount > 0 {
-					l.Debug().Uint64("ack_wait", ackWaitCount).Msg("ack wait queue is not empty, skip commit lsn in standby")
+				waitLen := c.ackWait.Load()
+				if waitLen > 0 {
+					l.Debug().
+						Uint64("ack_wait", waitLen).
+						Msg("ack wait queue is not empty, skip commit lsn in standby")
 					return nil, true, nil
 				}
 
 				l.Debug().Msg("timeout reached, commit")
-				currentLSN := c.manager.Latest().Get()
-				if err := c.commit(ctx, currentLSN); err != nil {
+				if err := c.commit(ctx, c.manager.Latest().Get()); err != nil {
 					l.Err(err).Msg("commit")
 					return nil, false, err
 				}
-
-				c.manager.Confirmed().Set(currentLSN)
 
 				l.Debug().Msg("timeout received, skip to next iteration")
 				return nil, true, nil
@@ -425,13 +442,25 @@ func (c *WALReader) readNext(ctx context.Context) (*pgproto3.CopyData, bool, err
 }
 
 func (c *WALReader) commit(ctx context.Context, lsn pglogrepl.LSN) error {
-	return pglogrepl.SendStandbyStatusUpdate(
+	l := log.Ctx(ctx)
+	l.Info().
+		Str("lsn", lsn.String()).
+		Msg("commit")
+
+	if err := pglogrepl.SendStandbyStatusUpdate(
 		ctx,
 		c.conn,
 		pglogrepl.StandbyStatusUpdate{
 			WALWritePosition: lsn,
 		},
-	)
+	); err != nil {
+		l.Err(err).Msg("commit error")
+		return err
+	}
+
+	c.manager.Confirmed().Set(lsn)
+
+	return nil
 }
 
 func (c *WALReader) parseMessage(
@@ -441,9 +470,9 @@ func (c *WALReader) parseMessage(
 	l := log.Ctx(ctx)
 
 	l.Debug().
-		Time("serverTime", xld.ServerTime).
-		Str("walStart", xld.WALStart.String()).
-		Str("walEnd", xld.ServerWALEnd.String()).
+		Time("server_time", xld.ServerTime).
+		Str("wal_start", xld.WALStart.String()).
+		Str("wal_end", xld.ServerWALEnd.String()).
 		Msg("wal received")
 
 	c.manager.Latest().Set(xld.WALStart)

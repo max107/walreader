@@ -10,19 +10,16 @@ func NewStateManager() *StateManager {
 	return &StateManager{
 		latest:    NewState(),
 		confirmed: NewState(),
-		acked:     NewState(),
 	}
 }
 
 type StateManager struct {
 	latest    *State
 	confirmed *State
-	acked     *State
 }
 
 func (s *StateManager) Latest() *State    { return s.latest }
 func (s *StateManager) Confirmed() *State { return s.confirmed }
-func (s *StateManager) Acked() *State     { return s.acked }
 
 func NewState() *State {
 	return &State{}
@@ -44,5 +41,7 @@ func (s *State) Set(l pglogrepl.LSN) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.lsn = l
+	if l > s.lsn {
+		s.lsn = l
+	}
 }
