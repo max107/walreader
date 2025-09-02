@@ -184,7 +184,7 @@ func createLogger(t *testing.T) context.Context {
 
 	if len(os.Getenv("DEBUG_LOG")) == 0 {
 		return log.Output(zerolog.ConsoleWriter{Out: os.Stderr}).
-			Level(zerolog.InfoLevel).
+			Level(zerolog.DebugLevel).
 			With().
 			Caller().
 			Logger().

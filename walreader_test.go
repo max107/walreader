@@ -14,6 +14,57 @@ import (
 	"github.com/max107/walreader"
 )
 
+func TestCommit(t *testing.T) {
+	ctx := createLogger(t)
+
+	t.Run("commit_no_new_data", func(t *testing.T) {
+		connector, name := newReader(t)
+
+		prepare(t, []string{
+			fmt.Sprintf(`create table %s (id serial primary key, name text not null);`, name),
+			`create table foobar (id serial primary key);`,
+			fmt.Sprintf(`drop publication if exists %s;`, name),
+			fmt.Sprintf(`create publication %s for table %s;`, name, name),
+			fmt.Sprintf(`select pg_create_logical_replication_slot('%s', 'pgoutput');`, name),
+			fmt.Sprintf(`insert into %s (id, name) values (1, 'book-1'), (2, 'book-2'), (3, 'book-3'), (4, 'book-4'), (5, 'book-5');`, name),
+		})
+		done := make(chan struct{}, 1)
+
+		go func() {
+			if err := connector.Start(ctx, 10, time.Second, func(_ context.Context, events []*walreader.Event) error {
+				return nil
+			}); err != nil {
+				t.Fail()
+			}
+		}()
+
+		require.Zero(t, connector.AckWait())
+
+		pool, err := pgxpool.New(ctx, "postgres://postgres:postgres@localhost:5432/app")
+		require.NoError(t, err)
+		defer pool.Close()
+
+		ticker := time.NewTicker(time.Second)
+		i := 1
+		for range ticker.C {
+			for range 1000 {
+				_, err := pool.Exec(ctx, fmt.Sprintf(`insert into foobar (id) values (%d);`, i))
+				require.NoError(t, err)
+				i++
+			}
+
+			if i > 5000 {
+				done <- struct{}{}
+				break
+			}
+		}
+
+		<-done
+
+		require.NoError(t, connector.Close(ctx))
+	})
+}
+
 func TestBasic(t *testing.T) {
 	ctx := createLogger(t)
 

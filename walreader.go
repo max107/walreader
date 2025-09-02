@@ -29,7 +29,7 @@ type WALReader struct {
 	mu              sync.Mutex
 	publicationName string
 	slotName        string
-	manager         *StateManager
+	state           *state
 	ackWait         atomic.Uint64
 	relations       map[uint32]*pglogrepl.RelationMessageV2
 	inStream        bool
@@ -43,12 +43,10 @@ func New(
 	conn, helperConn *pgx.Conn,
 	publicationName, slotName string,
 ) *WALReader {
-	manager := NewStateManager()
-
 	return &WALReader{
 		conn:            conn.PgConn(),
 		typeMap:         conn.TypeMap(),
-		manager:         manager,
+		state:           &state{},
 		eventCh:         make(chan *Event),
 		helperConn:      helperConn,
 		relations:       make(map[uint32]*pglogrepl.RelationMessageV2),
@@ -121,16 +119,15 @@ func (c *WALReader) flush(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	l.Info().Int("events_count", len(queue)).Msg("new events")
-
-	l.Debug().Int("ack_wait", len(queue)).Msg("flushing")
+	l.Info().Int("events_count", len(queue)).Msg("flush")
 
 	if err := fn(ctx, queue); err != nil {
 		l.Err(err).Msg("callback error")
 		return err
 	}
 
-	if err := c.commit(ctx, lastLSN); err != nil {
+	c.state.SetFlush(lastLSN)
+	if err := c.state.commit(ctx, c.conn); err != nil {
 		l.Err(err).Msg("last lsn commit error")
 		return err
 	}
@@ -210,8 +207,7 @@ func (c *WALReader) Start(
 		return ErrSlotInUse
 	}
 
-	c.manager.Latest().Set(slotInfo.CurrentLSN)
-	c.manager.Confirmed().Set(slotInfo.ConfirmedFlushLSN)
+	c.state.SetWrite(slotInfo.ConfirmedFlushLSN)
 
 	if err := c.startReplication(ctx, c.publicationName, c.slotName); err != nil {
 		l.Err(err).Msg("start replication")
@@ -338,20 +334,12 @@ func (c *WALReader) sink(ctx context.Context) error { //nolint:gocognit
 					return err
 				}
 
-				c.manager.Latest().Set(pkm.ServerWALEnd)
+				c.state.SetWrite(pkm.ServerWALEnd)
 
 				if pkm.ReplyRequested {
 					l.Info().Msg("keep alive reply requested")
 
-					waitLen := c.ackWait.Load()
-					if waitLen > 0 {
-						l.Info().
-							Uint64("ack_wait", waitLen).
-							Msg("ack wait queue is not empty, skip commit lsn in standby")
-						continue
-					}
-
-					if err := c.commit(ctx, c.manager.Latest().Get()); err != nil {
+					if err := c.state.commit(ctx, c.conn); err != nil {
 						l.Err(err).Msg("commit")
 						return err
 					}
@@ -405,8 +393,10 @@ func (c *WALReader) readNext(ctx context.Context) (*pgproto3.CopyData, bool, err
 					return nil, true, nil
 				}
 
+				c.state.SetFlush(c.state.GetWrite())
+
 				l.Debug().Msg("timeout reached, commit")
-				if err := c.commit(ctx, c.manager.Latest().Get()); err != nil {
+				if err := c.state.commit(ctx, c.conn); err != nil {
 					l.Err(err).Msg("commit")
 					return nil, false, err
 				}
@@ -441,28 +431,6 @@ func (c *WALReader) readNext(ctx context.Context) (*pgproto3.CopyData, bool, err
 	return msg, false, nil
 }
 
-func (c *WALReader) commit(ctx context.Context, lsn pglogrepl.LSN) error {
-	l := log.Ctx(ctx)
-	l.Info().
-		Str("lsn", lsn.String()).
-		Msg("commit")
-
-	if err := pglogrepl.SendStandbyStatusUpdate(
-		ctx,
-		c.conn,
-		pglogrepl.StandbyStatusUpdate{
-			WALWritePosition: lsn,
-		},
-	); err != nil {
-		l.Err(err).Msg("commit error")
-		return err
-	}
-
-	c.manager.Confirmed().Set(lsn)
-
-	return nil
-}
-
 func (c *WALReader) parseMessage(
 	ctx context.Context,
 	xld pglogrepl.XLogData,
@@ -475,7 +443,8 @@ func (c *WALReader) parseMessage(
 		Str("wal_end", xld.ServerWALEnd.String()).
 		Msg("wal received")
 
-	c.manager.Latest().Set(xld.WALStart)
+	c.state.SetWrite(xld.WALStart)
+
 	latency.Set(float64(time.Now().UTC().Sub(xld.ServerTime).Nanoseconds()))
 
 	logicalMsg, err := pglogrepl.ParseV2(xld.WALData, c.inStream)
