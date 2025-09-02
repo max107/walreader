@@ -22,6 +22,10 @@ var (
 	ErrSlotIsNotExists = errors.New("slot is not exists")
 )
 
+var (
+	deadline = time.Second
+)
+
 type WALReader struct {
 	conn            *pgconn.PgConn
 	typeMap         *pgtype.Map
@@ -116,9 +120,6 @@ func (c *WALReader) flush(
 ) error {
 	l := log.Ctx(ctx)
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	l.Info().Int("events_count", len(queue)).Msg("flush")
 
 	if err := fn(ctx, queue); err != nil {
@@ -127,7 +128,7 @@ func (c *WALReader) flush(
 	}
 
 	c.state.SetFlush(lastLSN)
-	if err := c.state.commit(ctx, c.conn); err != nil {
+	if err := c.commit(ctx); err != nil {
 		l.Err(err).Msg("last lsn commit error")
 		return err
 	}
@@ -302,11 +303,20 @@ func (c *WALReader) Ready() chan struct{} {
 	return c.readyCh
 }
 
+func (c *WALReader) commit(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.state.commit(ctx, c.conn)
+}
+
 func (c *WALReader) sink(ctx context.Context) error { //nolint:gocognit
 	l := log.Ctx(ctx)
 	l.Info().Msg("start replication loop")
 
 	defer close(c.eventCh)
+
+	nextDeadline := time.Now().Add(deadline)
 
 	for {
 		select {
@@ -315,6 +325,28 @@ func (c *WALReader) sink(ctx context.Context) error { //nolint:gocognit
 			return nil
 
 		default:
+			if time.Now().After(nextDeadline) {
+				// some sync flag is required for synchronisation of current lsn processing
+				// if no new xld received, we should ack latest lsn from PG_CURRENT_WAL_LSN()
+				// if we receive new xld then we should wait for ack lsn from last processed message
+				waitLen := c.ackWait.Load()
+				if waitLen > 0 {
+					l.Debug().
+						Uint64("ack_wait", waitLen).
+						Msg("ack wait queue is not empty, skip commit lsn in standby")
+					continue
+				}
+
+				c.state.SetFlush(c.state.GetWrite())
+
+				if err := c.commit(ctx); err != nil {
+					l.Err(err).Msg("stand by commit error")
+					return err
+				}
+
+				nextDeadline = time.Now().Add(deadline)
+			}
+
 			msg, skip, err := c.readNext(ctx)
 			if err != nil {
 				l.Err(err).Msg("receive message error")
@@ -338,12 +370,9 @@ func (c *WALReader) sink(ctx context.Context) error { //nolint:gocognit
 
 				if pkm.ReplyRequested {
 					l.Info().Msg("keep alive reply requested")
-
-					if err := c.state.commit(ctx, c.conn); err != nil {
-						l.Err(err).Msg("commit")
-						return err
-					}
+					nextDeadline = time.Time{}
 				}
+
 			case pglogrepl.XLogDataByteID:
 				xld, err := pglogrepl.ParseXLogData(msg.Data[1:])
 				if err != nil {
@@ -355,16 +384,13 @@ func (c *WALReader) sink(ctx context.Context) error { //nolint:gocognit
 					l.Err(err).Msg("decode wal data error")
 					return err
 				}
+
 			default:
 				l.Debug().Msg("unknown message type, skip")
 			}
 		}
 	}
 }
-
-var (
-	deadline = 500 * time.Millisecond
-)
 
 func (c *WALReader) readNext(ctx context.Context) (*pgproto3.CopyData, bool, error) {
 	l := log.Ctx(ctx)
@@ -380,27 +406,6 @@ func (c *WALReader) readNext(ctx context.Context) (*pgproto3.CopyData, bool, err
 			l.Info().Msg("connection closed")
 		default:
 			if pgconn.Timeout(err) {
-				l.Info().Msg("no new messages")
-
-				// some sync flag is required for synchronisation of current lsn processing
-				// if no new xld received, we should ack latest lsn from PG_CURRENT_WAL_LSN()
-				// if we receive new xld then we should wait for ack lsn from last processed message
-				waitLen := c.ackWait.Load()
-				if waitLen > 0 {
-					l.Debug().
-						Uint64("ack_wait", waitLen).
-						Msg("ack wait queue is not empty, skip commit lsn in standby")
-					return nil, true, nil
-				}
-
-				c.state.SetFlush(c.state.GetWrite())
-
-				l.Debug().Msg("timeout reached, commit")
-				if err := c.state.commit(ctx, c.conn); err != nil {
-					l.Err(err).Msg("commit")
-					return nil, false, err
-				}
-
 				l.Debug().Msg("timeout received, skip to next iteration")
 				return nil, true, nil
 			}
