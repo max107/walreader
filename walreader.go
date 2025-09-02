@@ -122,10 +122,12 @@ func (c *WALReader) flush(
 
 	l.Info().Int("events_count", len(queue)).Msg("flush")
 
+	start := time.Now()
 	if err := fn(ctx, queue); err != nil {
 		l.Err(err).Msg("callback error")
 		return err
 	}
+	processLatency.Set(time.Since(start).Seconds())
 
 	c.state.SetFlush(lastLSN)
 	if err := c.commit(ctx); err != nil {
@@ -450,7 +452,7 @@ func (c *WALReader) parseMessage(
 
 	c.state.SetWrite(xld.WALStart)
 
-	latency.Set(float64(time.Now().UTC().Sub(xld.ServerTime).Nanoseconds()))
+	latency.Set(time.Since(xld.ServerTime).Seconds())
 
 	logicalMsg, err := pglogrepl.ParseV2(xld.WALData, c.inStream)
 	if err != nil {
