@@ -38,7 +38,7 @@ func (s *state) commit(
 	// https://www.postgresql.org/docs/current/protocol-replication.html#PROTOCOL-REPLICATION-STANDBY-STATUS-UPDATE
 	// https://github.com/postgres/postgres/blob/36aed19fd99021ad9f727e4fd4bceb086a7cf54d/src/backend/replication/syncrep.c#L1123
 
-	l.Info().Str("write", s.write.String()).Str("flush", s.flush.String()).Msg("commit")
+	l.Debug().Str("write", s.write.String()).Str("flush", s.flush.String()).Msg("commit")
 
 	if err := pglogrepl.SendStandbyStatusUpdate(ctx, conn, pglogrepl.StandbyStatusUpdate{
 		WALWritePosition: s.write,
