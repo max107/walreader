@@ -426,7 +426,7 @@ func (c *WALReader) readNext(ctx context.Context) (*pgproto3.CopyData, bool, err
 		l.Error().
 			Str("error", string(res)).
 			Msg("receive postgres wal error")
-		return nil, true, nil
+		return nil, true, errors.New(string(res))
 	}
 
 	msg, ok := rawMsg.(*pgproto3.CopyData)
