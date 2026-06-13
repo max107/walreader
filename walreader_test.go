@@ -95,7 +95,7 @@ func TestBasic(t *testing.T) {
 
 		for i := range 5 {
 			m := <-messageCh
-			require.Equal(t, int32(i+1), m.Values["id"]) //nolint:gosec
+			require.Equal(t, int32(i+1), m.Values["id"])
 			require.Equal(t, fmt.Sprintf("book-%d", i+1), m.Values["name"])
 		}
 
@@ -177,7 +177,7 @@ func TestBasic(t *testing.T) {
 
 		for i := range 5 {
 			m := <-messageCh
-			require.Equal(t, int32(i+1), m.OldValues["id"]) //nolint:gosec
+			require.Equal(t, int32(i+1), m.OldValues["id"])
 		}
 
 		require.InEpsilon(t, 5.0, promValue(t, "delete"), 0)
@@ -212,7 +212,7 @@ func TestBasic(t *testing.T) {
 
 		for i := range 5 {
 			m := <-messageCh
-			require.Equal(t, int32(i+1), m.OldValues["id"]) //nolint:gosec
+			require.Equal(t, int32(i+1), m.OldValues["id"])
 		}
 
 		require.InEpsilon(t, 5.0, promValue(t, "delete"), 0)

@@ -22,9 +22,7 @@ var (
 	ErrSlotIsNotExists = errors.New("slot is not exists")
 )
 
-var (
-	deadline = time.Second
-)
+var deadline = time.Second
 
 type WALReader struct {
 	conn            *pgconn.PgConn
@@ -46,7 +44,13 @@ type WALReader struct {
 func New(
 	conn, helperConn *pgx.Conn,
 	publicationName, slotName string,
-) *WALReader {
+) (*WALReader, error) {
+	if len(publicationName) == 0 {
+		return nil, errors.New("empty publication name")
+	}
+	if len(slotName) == 0 {
+		return nil, errors.New("empty slot name")
+	}
 	return &WALReader{
 		conn:            conn.PgConn(),
 		typeMap:         conn.TypeMap(),
@@ -58,7 +62,7 @@ func New(
 		slotName:        slotName,
 		readyCh:         make(chan struct{}, 1),
 		stopCh:          make(chan struct{}),
-	}
+	}, nil
 }
 
 func (c *WALReader) startReplication(ctx context.Context, publicationName, slotName string) error {
@@ -76,7 +80,7 @@ func (c *WALReader) startReplication(ctx context.Context, publicationName, slotN
 
 func (c *WALReader) slotInfo(ctx context.Context) (*Info, error) {
 	row := c.helperConn.QueryRow(ctx, fmt.Sprintf(`
-SELECT 
+SELECT
     slot_name,
     active,
     active_pid,
@@ -84,7 +88,7 @@ SELECT
     confirmed_flush_lsn,
     wal_status,
     PG_CURRENT_WAL_LSN() AS current_lsn
-FROM pg_replication_slots 
+FROM pg_replication_slots
 WHERE slot_name = '%s';`,
 		c.slotName,
 	))

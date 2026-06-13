@@ -31,7 +31,10 @@ func main() {
 	}
 
 	name := "simple_demo"
-	connector := walreader.New(conn, slotConn, name, name)
+	connector, err := walreader.New(conn, slotConn, name, name)
+	if err != nil {
+		l.Fatal().Err(err).Send()
+	}
 
 	defer connector.Close(ctx)
 	if err := connector.Start(ctx, 100, time.Second, Handler); err != nil {

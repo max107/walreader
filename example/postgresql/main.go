@@ -37,7 +37,10 @@ func main() {
 		l.Fatal().Err(err).Send()
 	}
 
-	connector := walreader.New(conn, slotConn, "cdc_publication", "cdc_slot")
+	connector, err := walreader.New(conn, slotConn, "cdc_publication", "cdc_slot")
+	if err != nil {
+		l.Fatal().Err(err).Send()
+	}
 
 	if err := connector.Start(ctx, 100, time.Second, FilteredMapper(pool)); err != nil {
 		l.Fatal().Err(err).Send()

@@ -41,7 +41,10 @@ func newReader(t *testing.T) (*walreader.WALReader, string) {
 	conn := newReplicationConn(t)
 	slotConn := newConn(t)
 
-	return walreader.New(conn, slotConn, name, name), name
+	reader, err := walreader.New(conn, slotConn, name, name)
+	require.NoError(t, err)
+
+	return reader, name
 }
 
 func newReplicationConn(t *testing.T) *pgx.Conn {
