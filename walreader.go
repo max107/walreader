@@ -355,6 +355,10 @@ func (c *WALReader) sink(ctx context.Context) error { //nolint:gocognit
 
 			msg, skip, err := c.readNext(ctx)
 			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					return nil
+				}
+
 				l.Err(err).Msg("receive message error")
 				return err
 			}
