@@ -420,7 +420,6 @@ func (c *WALReader) readNext(ctx context.Context) (*pgproto3.CopyData, bool, err
 				return nil, true, nil
 			}
 
-			l.Err(err).Msg("receive message error")
 			return nil, false, err
 		}
 	}
