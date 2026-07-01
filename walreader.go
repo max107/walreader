@@ -22,7 +22,7 @@ var (
 	ErrSlotIsNotExists = errors.New("slot is not exists")
 )
 
-var deadline = time.Second
+var deadline = 5 * time.Second
 
 type WALReader struct {
 	conn            *pgconn.PgConn

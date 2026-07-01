@@ -13,7 +13,7 @@ services:
     <<: *x-networks
     image: bitnami/postgresql:17
     ports:
-      - "5433:5432"
+      - '5433:5432'
     environment:
       POSTGRESQL_PASSWORD: postgres
       POSTGRESQL_DATABASE: app
@@ -24,7 +24,7 @@ services:
     <<: *x-networks
     image: bitnami/postgresql:17
     ports:
-      - "5434:5432"
+      - '5434:5432'
     environment:
       POSTGRESQL_PASSWORD: postgres
       POSTGRESQL_DATABASE: app

@@ -33,7 +33,7 @@ func extractValues(
 	tuple *pglogrepl.TupleData,
 	rel *pglogrepl.RelationMessageV2,
 ) (map[string]any, error) {
-	values := map[string]interface{}{}
+	values := map[string]any{}
 	for idx, col := range tuple.Columns {
 		colName := rel.Columns[idx].Name
 		switch col.DataType {
