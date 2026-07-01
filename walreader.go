@@ -153,6 +153,9 @@ func (c *WALReader) batchProcess(
 ) error {
 	l := log.Ctx(ctx)
 
+	ticker := time.NewTicker(timeout)
+	defer ticker.Stop()
+
 	var lastLSN pglogrepl.LSN
 
 	queue := make([]*Event, 0, bulkSize)
@@ -180,7 +183,7 @@ func (c *WALReader) batchProcess(
 				queue = make([]*Event, 0, bulkSize)
 			}
 
-		case <-time.After(timeout):
+		case <-ticker.C:
 			if len(queue) == 0 {
 				continue
 			}
