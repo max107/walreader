@@ -15,11 +15,11 @@ import (
 // write - The primary server waits until the standby server confirms that the transaction's data
 // has been written to its memory or operating system cache (but not necessarily to disk).
 //
-// flush - The primary server waits until the standby server confirms that the transaction’s data
+// flush - The primary server waits until the standby server confirms that the transaction's data
 // has been flushed to durable storage (i.e., written to disk).
 //
 // apply - The primary server waits until the standby server confirms that the transaction has been
-// applied (i.e., the changes are visible in the standby’s database).
+// applied (i.e., the changes are visible in the standby's database).
 type state struct {
 	mu    sync.RWMutex
 	write pglogrepl.LSN
